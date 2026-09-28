@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI, HTTPException, Request, Response  # noqa: E402
-from fastapi.responses import FileResponse  # noqa: E402
+from fastapi.responses import FileResponse, RedirectResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
@@ -92,6 +92,11 @@ app.include_router(plotly_api.router)
 ui_dir = Path("static")
 ui_dir.mkdir(exist_ok=True)
 app.mount("/ui", StaticFiles(directory="static", html=True), name="static_ui")
+
+
+@app.get("/", include_in_schema=False)
+def ui_root() -> RedirectResponse:
+    return RedirectResponse("/ui/")
 
 
 @app.middleware("http")
