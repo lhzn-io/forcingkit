@@ -11,5 +11,6 @@ It acts as a caching proxy designed to alleviate the complexities of remote netC
    :caption: Contents:
 
    fetchers
+   atmospheric_forcing
    nyofs
    tidal_harmonics

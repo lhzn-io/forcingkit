@@ -6,6 +6,11 @@ The Data Fetchers module contains implementations for communicating with externa
 Atmospheric Forcing Tiers
 --------------------------
 
+.. note::
+   This section describes the legacy wind forcing of ``/api/v1/bc/generate``. Ocean models take
+   the full HRRR surface atmosphere from ``/api/v1/atmosphere``; see :doc:`atmospheric_forcing`
+   for that path and a comparison of the available datasets.
+
 Wind forcing is dispatched by how far the target date is from the present:
 
 .. list-table::
