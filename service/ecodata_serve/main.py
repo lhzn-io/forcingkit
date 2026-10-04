@@ -164,6 +164,10 @@ class OBCRequest(BaseModel):
     sponge_cells: int = 0
     include_tides: bool = True
     tidal_model: str = "GOT4.10c"
+    # Parent-ocean options (schema z-v2): donor cells of padding beyond the bbox, so the parent
+    # brackets the child, and the spacing of the fixed z levels.
+    pad_cells: int = 3
+    vertical_spacing_m: float = 2.0
 
 
 class ICRequest(BaseModel):
@@ -854,6 +858,34 @@ async def regrid_ic(request: ICRegridRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _obc_hash_source(request: "OBCRequest", bbox_list: list, donor_id: str) -> str:
+    """The string an OBC store id is hashed from. Shared by /obc/cache and /obc so the two can
+    never disagree; it includes the store schema, so a store built under an older schema is never
+    served for a newer request."""
+    from ecodata_cache.fetchers.necofs import OBC_SCHEMA
+
+    return (
+        f"{bbox_list}_{request.start_date}_{request.duration_hours}_{donor_id}_"
+        f"{request.sponge_cells}_{request.include_tides}_{request.tidal_model}_obc_"
+        f"{OBC_SCHEMA}_p{request.pad_cells}_dz{request.vertical_spacing_m}"
+    )
+
+
+def _zip_is_stale(zip_path: str, store_path: str) -> bool:
+    """True when the zip is missing or older than the newest file in the store."""
+    if not os.path.exists(zip_path):
+        return True
+    newest = max(
+        (
+            os.path.getmtime(os.path.join(d, f))
+            for d, _, files in os.walk(store_path)
+            for f in files
+        ),
+        default=os.path.getmtime(store_path),
+    )
+    return os.path.getmtime(zip_path) < newest
+
+
 @app.post("/api/v1/obc/cache")
 async def cache_obc(request: OBCRequest) -> Dict[str, Any]:
     import hashlib
@@ -868,7 +900,7 @@ async def cache_obc(request: OBCRequest) -> Dict[str, Any]:
     ]
     donor_meta = predict_obc_donor(bbox_list)
     donor_id = donor_meta.get("id", "unknown")
-    hash_str = f"{bbox_list}_{request.start_date}_{request.duration_hours}_{donor_id}_{request.sponge_cells}_{request.include_tides}_{request.tidal_model}_obc"
+    hash_str = _obc_hash_source(request, bbox_list, donor_id)
     raw_id = hashlib.md5(hash_str.encode()).hexdigest()[:12]
     return {"status": "success", "zarr_id": f"obc_{raw_id}"}
 
@@ -913,7 +945,7 @@ async def generate_obc(request: OBCRequest) -> Dict[str, Any]:
     import hashlib
 
     # Hash unique configuration plus donor
-    hash_str = f"{bbox_list}_{request.start_date}_{request.duration_hours}_{donor_id}_{request.sponge_cells}_{request.include_tides}_{request.tidal_model}_obc"
+    hash_str = _obc_hash_source(request, bbox_list, donor_id)
     raw_id = hashlib.md5(hash_str.encode()).hexdigest()[:12]
     zarr_id = f"obc_{raw_id}"
     zarr_name = f"{zarr_id}.zarr"
@@ -942,6 +974,8 @@ async def generate_obc(request: OBCRequest) -> Dict[str, Any]:
             include_tides=request.include_tides,
             tidal_model=request.tidal_model,
             sponge_cells=request.sponge_cells,
+            pad_cells=request.pad_cells,
+            vertical_spacing_m=request.vertical_spacing_m,
         )
         return {
             "status": "success",
@@ -972,9 +1006,10 @@ async def download_obc(zarr_id: str):
         raise HTTPException(status_code=404, detail="OBC Zarr archive not found.")
     zarr_path = str(matches[0])
 
-    # Compress the folder on the fly
+    # Compress the folder on the fly, and rebuild a zip older than its store: after a cache_bust
+    # the store is rewritten under the same id, and a stale zip would otherwise be served.
     zip_path = os.path.join(cache_dir, f"{search_id}.zip")
-    if not os.path.exists(zip_path):
+    if _zip_is_stale(zip_path, zarr_path):
         shutil.make_archive(zip_path.replace(".zip", ""), "zip", zarr_path)
 
     return FileResponse(

@@ -571,7 +571,11 @@ def dispatch_obc_request(
     include_tides: bool = True,
     tidal_model: str = "GOT4.10c",
     sponge_cells: int = 0,
+    pad_cells: int = 3,
+    vertical_spacing_m: float = 2.0,
 ) -> str:
+    from ecodata_cache.fetchers.necofs import OBC_SCHEMA
+
     os.makedirs(cache_dir, exist_ok=True)
     obc_cache_dir = os.path.join(cache_dir, "obc")
     os.makedirs(obc_cache_dir, exist_ok=True)
@@ -580,7 +584,7 @@ def dispatch_obc_request(
     import json
 
     if not zarr_path:
-        key_str = f"obc_{start_date}_{duration_hours}_{bbox[0]}_{bbox[1]}_{bbox[2]}_{bbox[3]}_s{sponge_cells}_{include_tides}_{tidal_model}"
+        key_str = f"obc_{start_date}_{duration_hours}_{bbox[0]}_{bbox[1]}_{bbox[2]}_{bbox[3]}_s{sponge_cells}_{include_tides}_{tidal_model}_{OBC_SCHEMA}_p{pad_cells}_dz{vertical_spacing_m}"
         key_hash = hashlib.sha256(key_str.encode()).hexdigest()[:12]
         zarr_name = f"obc_{key_hash}.zarr"
         zarr_path = os.path.join(obc_cache_dir, zarr_name)
@@ -600,6 +604,9 @@ def dispatch_obc_request(
                             "sponge_cells": sponge_cells,
                             "include_tides": include_tides,
                             "tidal_model": tidal_model,
+                            "schema": OBC_SCHEMA,
+                            "pad_cells": pad_cells,
+                            "vertical_spacing_m": vertical_spacing_m,
                         },
                         f,
                         indent=2,
@@ -622,7 +629,16 @@ def dispatch_obc_request(
     for candidate_module, candidate_fetch_func, candidate_meta in candidates_to_try:
         logger.info(f"Trying OBC donor: {candidate_meta['name']}")
         try:
-            ds = candidate_fetch_func(start_date, duration_hours, bbox)
+            ds = candidate_fetch_func(
+                start_date,
+                duration_hours,
+                bbox,
+                **_supported_kwargs(
+                    candidate_fetch_func,
+                    pad_cells=pad_cells,
+                    vertical_spacing_m=vertical_spacing_m,
+                ),
+            )
         except Exception as e:
             logger.warning(f"{candidate_meta['name']} OBC fetch raised: {e}")
             ds = None
@@ -673,19 +689,45 @@ def dispatch_obc_request(
         else:
             ds[var].encoding["_FillValue"] = -9999.0
 
+        # Coordinates keep full precision: Float32 longitudes near -74 resolve only about
+        # 8e-6 degrees, enough to misplace a 0.002 degree grid relative to its child.
         if (
-            ds[var].dtype == "float64" or ds[var].dtype == "float32"
-        ) and "time" not in str(var):
+            (ds[var].dtype == "float64" or ds[var].dtype == "float32")
+            and "time" not in str(var)
+            and var not in _FULL_PRECISION_COORDS
+        ):
             ds[var] = ds[var].astype("<f4")
+
+    # Schema-versioned parent stores state their time axis in seconds from the first record.
+    if ds.attrs.get("schema") == OBC_SCHEMA and "time" in ds.coords:
+        import pandas as pd
+
+        first = pd.Timestamp(ds["time"].values[0]).strftime("%Y-%m-%dT%H:%M:%S")
+        ds["time"].encoding = {"units": f"seconds since {first}", "dtype": "float64"}
 
     ds.attrs["source"] = target_module.__name__
     ds.attrs["type"] = "3D Time-Varying Hindcast (Coupled Tides + Reanalysis)"
     ds.attrs["duration_hours"] = duration_hours
     ds.attrs["sponge_cells"] = sponge_cells
+    ds.attrs["schema"] = ds.attrs.get("schema", "legacy")
 
     logger.info(f"Writing OBC data to Zarr: {zarr_path}")
     ds.to_zarr(zarr_path, mode="w", consolidated=True, zarr_format=2)
     return zarr_path
+
+
+_FULL_PRECISION_COORDS = ("lat", "lon", "z", "z_face")
+
+
+def _supported_kwargs(func, **kwargs) -> dict:
+    """The subset of `kwargs` that `func` accepts, so options for one donor's fetcher can be
+    offered to every candidate without breaking the shared (start, duration, bbox) signature."""
+    import inspect
+
+    params = inspect.signature(func).parameters
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return kwargs
+    return {k: v for k, v in kwargs.items() if k in params}
 
 
 def get_obc_fetchers():

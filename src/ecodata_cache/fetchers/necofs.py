@@ -269,13 +269,88 @@ def fetch_necofs_initial_conditions(
         return None
 
 
-def fetch_necofs_boundary_conditions(
-    start_date: str, duration_hours: int, bbox: list[float]
-) -> Optional[xr.Dataset]:
+# Parent-ocean delivery schema. Bump when the layout or meaning of the boundary store changes, so
+# a cached store built under an older schema can never be served for a newer request.
+OBC_SCHEMA = "z-v2"
+
+
+def necofs_archive_file_date(t: pd.Timestamp) -> pd.Timestamp:
+    """Date stamp of the GOM7 daily history file that holds the record at time `t`.
+
+    File D holds (D-1 01:00, D 00:00], so the record at exactly midnight lives in the file stamped
+    with that same day, and every other hour in the file stamped the following day.
     """
-    Fetches the 4D unstructured ocean state from NECOFS (GOM3/MASSBAY),
-    and regrids it to a structured grid suitable for OBCs.
-    Fetches multiple files if duration_hours spans multiple days.
+    return (t - pd.Timedelta(hours=1)).normalize() + pd.Timedelta(days=1)
+
+
+def z_levels_for_depth(
+    max_depth_m: float, spacing_m: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """Fixed z levels covering 0 to -max_depth_m: (centres, faces), both ordered bottom to top.
+
+    The bottom face sits at or below -max_depth_m, so every wet donor column is spanned.
+    """
+    if spacing_m <= 0:
+        raise ValueError(f"vertical spacing must be positive, got {spacing_m}")
+    nz = max(1, int(np.ceil(max_depth_m / spacing_m)))
+    faces = -spacing_m * np.arange(nz, -1, -1, dtype=np.float64)
+    centres = 0.5 * (faces[:-1] + faces[1:])
+    return centres, faces
+
+
+def sigma_to_z(
+    values: np.ndarray,
+    z_layers: np.ndarray,
+    z_bottom: np.ndarray,
+    z_targets: np.ndarray,
+) -> np.ndarray:
+    """Interpolate sigma-layer columns onto fixed z levels.
+
+    values, z_layers: (nsig, ny, nx), layer index 0 at the surface (FVCOM convention), z negative.
+    z_bottom: (ny, nx), the sea floor (-h); NaN marks land.
+    z_targets: (nz,) target level centres, any order.
+
+    Returns (nz, ny, nx). Between the surface and the shallowest layer centre the shallowest value
+    is used, and between the deepest layer centre and the sea floor the deepest value; levels below
+    the sea floor, and land columns, are NaN.
+    """
+    nsig = values.shape[0]
+    out = np.full((len(z_targets),) + values.shape[1:], np.nan, dtype=np.float64)
+    land = ~np.isfinite(z_bottom)
+    for n, zt in enumerate(z_targets):
+        # Number of layer centres at or above this level; layers are ordered surface first.
+        above = np.sum(z_layers >= zt, axis=0)
+        upper = np.clip(above - 1, 0, nsig - 1)
+        lower = np.clip(above, 0, nsig - 1)
+        zu = np.take_along_axis(z_layers, upper[None], axis=0)[0]
+        zl = np.take_along_axis(z_layers, lower[None], axis=0)[0]
+        vu = np.take_along_axis(values, upper[None], axis=0)[0]
+        vl = np.take_along_axis(values, lower[None], axis=0)[0]
+        span = zu - zl
+        w = np.where(span > 0, (zu - zt) / np.where(span > 0, span, 1.0), 0.0)
+        w = np.clip(w, 0.0, 1.0)
+        level = (1.0 - w) * vu + w * vl
+        level[zt < z_bottom] = np.nan
+        level[land] = np.nan
+        out[n] = level
+    return out
+
+
+def fetch_necofs_boundary_conditions(
+    start_date: str,
+    duration_hours: int,
+    bbox: list[float],
+    pad_cells: int = 3,
+    vertical_spacing_m: float = 2.0,
+) -> Optional[xr.Dataset]:
+    """NECOFS GOM7 as a parent ocean for a nested regional model.
+
+    Returns u, v, temp, salt on (time, z, lat, lon) and zeta on (time, lat, lon), on a regular
+    0.002 degree grid covering `bbox` plus `pad_cells` donor cells on every side, so the parent
+    brackets the child. The vertical axis is true depth: each FVCOM sigma layer is placed at
+    z = siglay * (h + zeta) + zeta for its column and interpolated onto fixed levels every
+    `vertical_spacing_m` metres, ordered bottom to top. Land, points outside the mesh and levels
+    below the sea floor are NaN. The first record is at `start_date` itself.
     """
     min_lon, min_lat, max_lon, max_lat = bbox
 
@@ -288,30 +363,32 @@ def fetch_necofs_boundary_conditions(
         target_dt = target_dt.tz_convert("UTC").tz_localize(None)
 
     import requests
+    import concurrent.futures
 
     d_spacing = 0.002
-    lon_rho = np.arange(min_lon, max_lon, d_spacing)
-    lat_rho = np.arange(min_lat, max_lat, d_spacing)
-    lon_grid, lat_grid = np.meshgrid(lon_rho, lat_rho)
+    pad = pad_cells * d_spacing
+    lon_axis = np.arange(min_lon - pad, max_lon + pad + d_spacing / 2, d_spacing)
+    lat_axis = np.arange(min_lat - pad, max_lat + pad + d_spacing / 2, d_spacing)
+    lon_grid, lat_grid = np.meshgrid(lon_axis, lat_axis)
     target_pts = np.column_stack((lon_grid.ravel(), lat_grid.ravel()))
+    ny, nx = lon_grid.shape
 
-    tri_node, tri_elem = None, None
-    land_mask = None
-    depths = None
-    s_rho_dim = 45
+    tri_node = tri_elem = None
+    h_grid = siglay_grid = None
+    z_centres = z_faces = None
 
-    collected_times = []
-    collected_u: list[np.ndarray] = []
-    collected_v: list[np.ndarray] = []
-    collected_temp: list[np.ndarray] = []
-    collected_salt: list[np.ndarray] = []
-    collected_zeta: list[np.ndarray] = []
+    collected_times: list = []
+    collected: dict[str, list[np.ndarray]] = {
+        k: [] for k in ("u", "v", "temp", "salt", "zeta")
+    }
 
     current_dt = target_dt
     hours_fetched = 0
 
     while hours_fetched < duration_hours:
-        dap_url = get_necofs_url(current_dt)
+        # get_necofs_url(t) opens the file stamped t.normalize() + 1 day.
+        file_date = necofs_archive_file_date(current_dt)
+        dap_url = get_necofs_url(file_date - pd.Timedelta(days=1))
         try:
             requests.get(dap_url + ".dds", timeout=10).raise_for_status()
         except requests.RequestException as e:
@@ -330,25 +407,31 @@ def fetch_necofs_boundary_conditions(
                 ds_times = ds_times.tz_convert("UTC").tz_localize(None)
 
             if tri_node is None:
-                lon = ds["lon"].values
-                lat = ds["lat"].values
-                lonc = ds["lonc"].values
-                latc = ds["latc"].values
-
-                logger.info("Building NECOFS OBC interpolators...")
-                pts_node = np.column_stack((lon, lat))
-                tri_node = Delaunay(pts_node)
-                pts_elem = np.column_stack((lonc, latc))
-                tri_elem = Delaunay(pts_elem)
-
-                s_rho_dim = ds.sizes.get("siglay", 45)
-                depths = np.linspace(-50, 0, s_rho_dim)
-
-                zeta_0 = ds["zeta"].isel(time=0).values
-                zeta_grid = LinearNDInterpolator(tri_node, zeta_0)(target_pts).reshape(
-                    lon_grid.shape
+                logger.info("Building NECOFS parent interpolators and vertical grid...")
+                tri_node = Delaunay(
+                    np.column_stack((ds["lon"].values, ds["lat"].values))
                 )
-                land_mask = np.isnan(zeta_grid)
+                tri_elem = Delaunay(
+                    np.column_stack((ds["lonc"].values, ds["latc"].values))
+                )
+
+                h_grid = LinearNDInterpolator(tri_node, ds["h"].values)(
+                    target_pts
+                ).reshape(ny, nx)
+                siglay = np.asarray(ds["siglay"].values)  # (nsig, node), surface first
+                siglay_grid = np.stack(
+                    [
+                        LinearNDInterpolator(tri_node, siglay[k])(target_pts).reshape(
+                            ny, nx
+                        )
+                        for k in range(siglay.shape[0])
+                    ]
+                )
+                if not np.any(np.isfinite(h_grid)):
+                    raise ValueError(f"No NECOFS ocean inside {bbox}")
+                z_centres, z_faces = z_levels_for_depth(
+                    float(np.nanmax(h_grid)), vertical_spacing_m
+                )
 
             valid_mask = ds_times >= current_dt
             if not valid_mask.any():
@@ -357,134 +440,119 @@ def fetch_necofs_boundary_conditions(
                 continue
 
             start_idx = int(np.argmax(valid_mask))
-            remaining_hours = duration_hours - hours_fetched
-            file_remaining_steps = len(ds_times) - start_idx
-            take_steps = min(remaining_hours, file_remaining_steps)
-
-            end_idx = start_idx + take_steps - 1
-            ds_t = ds.isel(time=slice(start_idx, end_idx + 1))
+            take_steps = min(duration_hours - hours_fetched, len(ds_times) - start_idx)
+            ds_t = ds.isel(time=slice(start_idx, start_idx + take_steps))
             nt = int(take_steps)
-            nz = s_rho_dim
-            ny = len(lat_rho)
-            nx = len(lon_rho)
-
             logger.info(f"Extracting {nt} time steps from {dap_url} (parallelized)...")
 
-            import concurrent.futures
+            def process_time_step(t_idx):
+                zeta_t = LinearNDInterpolator(
+                    tri_node, ds_t["zeta"].isel(time=t_idx).values
+                )(target_pts).reshape(ny, nx)
+                z_bottom = np.where(np.isfinite(zeta_t), -h_grid, np.nan)
+                z_layers = siglay_grid * (h_grid + zeta_t)[None] + zeta_t[None]
 
-            def process_time_step(t_idx, current_hours_fetched):
-                logger.info(
-                    f"Fetching time step {t_idx + 1}/{nt} for OBC (Grand Total: {current_hours_fetched + t_idx + 1}/{duration_hours})..."
-                )
-                # Note: PyDAP engine may occasionally hiccup with concurrent connections,
-                # but usually per-timestep extraction on separate slices avoids direct overlap
-                # if xarray isolates them, or we catch and retry if needed.
-                u_t = ds_t["u"].isel(time=t_idx).values
-                v_t = ds_t["v"].isel(time=t_idx).values
-                temp_t = ds_t["temp"].isel(time=t_idx).values
-                salt_t = ds_t["salinity"].isel(time=t_idx).values
-                zeta_t = ds_t["zeta"].isel(time=t_idx).values
+                def layers(name, tri):
+                    raw = ds_t[name].isel(time=t_idx).values
+                    return np.stack(
+                        [
+                            LinearNDInterpolator(tri, raw[k])(target_pts).reshape(
+                                ny, nx
+                            )
+                            for k in range(raw.shape[0])
+                        ]
+                    )
 
-                interp_zeta = LinearNDInterpolator(tri_node, zeta_t)
-                zeta_k = interp_zeta(target_pts).reshape(lon_grid.shape)
-                zeta_k[land_mask] = np.nan
+                fields = {
+                    "u": layers("u", tri_elem),
+                    "v": layers("v", tri_elem),
+                    "temp": layers("temp", tri_node),
+                    "salt": layers("salinity", tri_node),
+                }
+                out = {
+                    k: sigma_to_z(v, z_layers, z_bottom, z_centres).astype(np.float32)
+                    for k, v in fields.items()
+                }
+                out["zeta"] = zeta_t.astype(np.float32)
+                return t_idx, out
 
-                u_out_t = np.zeros((nz, ny, nx), dtype=np.float32)
-                v_out_t = np.zeros((nz, ny, nx), dtype=np.float32)
-                temp_out_t = np.zeros((nz, ny, nx), dtype=np.float32)
-                salt_out_t = np.zeros((nz, ny, nx), dtype=np.float32)
-
-                for k in range(nz):
-                    interp_u = LinearNDInterpolator(tri_elem, u_t[k, :])
-                    interp_v = LinearNDInterpolator(tri_elem, v_t[k, :])
-                    interp_temp = LinearNDInterpolator(tri_node, temp_t[k, :])
-                    interp_salt = LinearNDInterpolator(tri_node, salt_t[k, :])
-
-                    u_k = interp_u(target_pts).reshape(lon_grid.shape)
-                    u_k[land_mask] = np.nan
-                    v_k = interp_v(target_pts).reshape(lon_grid.shape)
-                    v_k[land_mask] = np.nan
-
-                    temp_k = interp_temp(target_pts).reshape(lon_grid.shape)
-                    temp_k[land_mask] = np.nan
-                    salt_k = interp_salt(target_pts).reshape(lon_grid.shape)
-                    salt_k[land_mask] = np.nan
-
-                    u_out_t[k, :, :] = u_k
-                    v_out_t[k, :, :] = v_k
-                    temp_out_t[k, :, :] = temp_k
-                    salt_out_t[k, :, :] = salt_k
-
-                return t_idx, u_out_t, v_out_t, temp_out_t, salt_out_t, zeta_k
-
-            # Pre-allocate for ordered insertion
-            u_results: list[Optional[np.ndarray]] = [None] * nt
-            v_results: list[Optional[np.ndarray]] = [None] * nt
-            temp_results: list[Optional[np.ndarray]] = [None] * nt
-            salt_results: list[Optional[np.ndarray]] = [None] * nt
-            zeta_results: list[Optional[np.ndarray]] = [None] * nt
-
+            results: list[Optional[dict]] = [None] * nt
             max_workers = int(os.environ.get("ECODATA_CACHE_MAX_WORKERS", 4))
             with concurrent.futures.ThreadPoolExecutor(
                 max_workers=max_workers
             ) as executor:
-                futures = [
-                    executor.submit(process_time_step, t, hours_fetched)
-                    for t in range(nt)
-                ]
-                for future in concurrent.futures.as_completed(futures):
-                    t_idx, u_out_t, v_out_t, temp_out_t, salt_out_t, zeta_k = (
-                        future.result()
-                    )
-                    u_results[t_idx] = u_out_t
-                    v_results[t_idx] = v_out_t
-                    temp_results[t_idx] = temp_out_t
-                    salt_results[t_idx] = salt_out_t
-                    zeta_results[t_idx] = zeta_k
+                for future in concurrent.futures.as_completed(
+                    [executor.submit(process_time_step, t) for t in range(nt)]
+                ):
+                    t_idx, out = future.result()
+                    results[t_idx] = out
+            for k in collected:
+                collected[k].extend(
+                    _require_all([r[k] if r else None for r in results], k)
+                )
 
-            collected_zeta.extend(_require_all(zeta_results, "zeta"))
-            collected_u.extend(_require_all(u_results, "u"))
-            collected_v.extend(_require_all(v_results, "v"))
-            collected_temp.extend(_require_all(temp_results, "temp"))
-            collected_salt.extend(_require_all(salt_results, "salt"))
-
-            hours_fetched += int(take_steps)
+            hours_fetched += nt
             collected_times.extend(ds_t.time.values)
-
-            # Advance current_dt
-            if end_idx + 1 < len(ds_times):
-                current_dt = ds_times[end_idx + 1]
-            else:
-                current_dt = ds_times[-1] + pd.Timedelta(hours=1)
+            last = start_idx + take_steps - 1
+            current_dt = ds_times[last] + pd.Timedelta(hours=1)
 
         except Exception as e:
             logger.error(f"Failed to process NECOFS OBC chunk: {e}")
             break
 
-    if hours_fetched == 0:
+    if hours_fetched == 0 or h_grid is None:
         return None
 
-    # Stack results
-    u_out = np.stack(collected_u, axis=0)
-    v_out = np.stack(collected_v, axis=0)
-    temp_out = np.stack(collected_temp, axis=0)
-    salt_out = np.stack(collected_salt, axis=0)
-    zeta_out = np.stack(collected_zeta, axis=0)
-
+    mask = np.isfinite(h_grid).astype(np.int8)
     ds_out = xr.Dataset(
         data_vars={
-            "u": (("time", "depth", "eta", "xi"), u_out),
-            "v": (("time", "depth", "eta", "xi"), v_out),
-            "temp": (("time", "depth", "eta", "xi"), temp_out),
-            "salt": (("time", "depth", "eta", "xi"), salt_out),
-            "zeta": (("time", "eta", "xi"), zeta_out),
+            "u": (("time", "z", "lat", "lon"), np.stack(collected["u"])),
+            "v": (("time", "z", "lat", "lon"), np.stack(collected["v"])),
+            "temp": (("time", "z", "lat", "lon"), np.stack(collected["temp"])),
+            "salt": (("time", "z", "lat", "lon"), np.stack(collected["salt"])),
+            "zeta": (("time", "lat", "lon"), np.stack(collected["zeta"])),
+            "h": (("lat", "lon"), h_grid.astype(np.float32)),
+            "mask": (("lat", "lon"), mask),
+            "z_face": (("z_face",), z_faces),
         },
         coords={
             "time": collected_times,
-            "depth": depths,
-            "eta": lat_rho,
-            "xi": lon_rho,
+            "z": z_centres,
+            "lat": lat_axis,
+            "lon": lon_axis,
         },
-        attrs={"type": "NECOFS/FVCOM GOM3 OBC", "source": "UMass Dartmouth SMAST"},
+        attrs={
+            "type": "NECOFS/FVCOM GOM7 parent ocean",
+            "source": "UMass Dartmouth SMAST",
+            "schema": OBC_SCHEMA,
+            "pad_cells": pad_cells,
+            "vertical_spacing_m": vertical_spacing_m,
+            "requested_bbox": list(bbox),
+        },
+    )
+    units = {
+        "u": ("m s-1", "eastward_sea_water_velocity"),
+        "v": ("m s-1", "northward_sea_water_velocity"),
+        "temp": ("degree_Celsius", "sea_water_temperature"),
+        "salt": ("1e-3", "sea_water_practical_salinity"),
+        "zeta": ("m", "sea_surface_height_above_geoid"),
+        "h": ("m", "sea_floor_depth_below_geoid"),
+    }
+    for name, (unit, standard_name) in units.items():
+        ds_out[name].attrs.update(units=unit, standard_name=standard_name)
+    ds_out["mask"].attrs.update(
+        long_name="1 where NECOFS has ocean, 0 on land or outside the mesh"
+    )
+    ds_out["z"].attrs.update(
+        units="m", positive="up", axis="Z", long_name="level centre depth"
+    )
+    ds_out["z_face"].attrs.update(
+        units="m", positive="up", long_name="level faces, bottom to top"
+    )
+    ds_out["lat"].attrs.update(
+        units="degrees_north", standard_name="latitude", axis="Y"
+    )
+    ds_out["lon"].attrs.update(
+        units="degrees_east", standard_name="longitude", axis="X"
     )
     return ds_out
