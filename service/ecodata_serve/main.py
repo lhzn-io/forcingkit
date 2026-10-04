@@ -4,7 +4,7 @@ import sys
 import time
 import shutil
 from pathlib import Path
-from typing import Dict, Any, Callable, Awaitable, Optional
+from typing import Dict, Any, Callable, Awaitable, List, Optional
 
 from dotenv import load_dotenv
 
@@ -1022,6 +1022,36 @@ def download_obc(zarr_id: str):
         media_type="application/zip",
         filename=f"{search_id}.zip",
     )
+
+
+class NDBCRequest(BaseModel):
+    station_id: str
+    start_time: str  # ISO 8601, UTC
+    end_time: str
+    products: List[str] = ["stdmet", "adcp"]
+
+
+@app.post("/api/v1/ndbc")
+def get_ndbc(request: NDBCRequest) -> Dict[str, Any]:
+    """Observations at an NDBC buoy over a window, for validation: stdmet (sea and air
+    temperature, pressure, wind, waves) and ADCP near-surface current as east and north
+    components. Missing values are null."""
+    from ecodata_cache.fetchers.ndbc import fetch_ndbc
+
+    try:
+        data = fetch_ndbc(
+            request.station_id,
+            request.start_time,
+            request.end_time,
+            tuple(request.products),
+            cache_dir=_atmosphere_cache_dir(),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"NDBC fetch failed: {e}")
+        raise HTTPException(status_code=502, detail=str(e))
+    return {"status": "success", "data": data}
 
 
 class AtmosphereRequest(BaseModel):
