@@ -1024,6 +1024,86 @@ def download_obc(zarr_id: str):
     )
 
 
+class AtmosphereRequest(BaseModel):
+    bbox: BoundingBox
+    start_time: str  # ISO 8601, UTC
+    hours: int
+    source: str = "hrrr"
+    resolution_deg: float = 0.03
+    margin_deg: float = 0.25
+    cache_bust: bool = False
+
+
+def _atmosphere_cache_dir() -> str:
+    return os.environ.get(
+        "COASTAL_SIM_DATA_CACHE_DIR", os.path.expanduser("~/.cache/ecodata-cache")
+    )
+
+
+@app.post("/api/v1/atmosphere")
+def generate_atmosphere(request: AtmosphereRequest) -> Dict[str, Any]:
+    """A prescribed atmosphere for an ocean model: HRRR hourly fields on a regular lon/lat grid,
+    from one hour before `start_time` to one hour after the end, streamed to a Zarr store."""
+    from ecodata_cache.dispatcher import atmosphere_key, dispatch_atmosphere_request
+
+    if request.source != "hrrr":
+        raise HTTPException(
+            status_code=400, detail=f"unsupported source {request.source}"
+        )
+    if request.hours < 1:
+        raise HTTPException(status_code=400, detail="hours must be at least 1")
+    bbox_list = [
+        request.bbox.min_lon,
+        request.bbox.min_lat,
+        request.bbox.max_lon,
+        request.bbox.max_lat,
+    ]
+    zarr_id = atmosphere_key(
+        bbox_list,
+        request.start_time,
+        request.hours,
+        request.resolution_deg,
+        request.margin_deg,
+        request.source,
+    )
+    zarr_path = os.path.join(_atmosphere_cache_dir(), f"{zarr_id}.zarr")
+    try:
+        final_path = dispatch_atmosphere_request(
+            bbox_list,
+            request.start_time,
+            request.hours,
+            zarr_path,
+            resolution_deg=request.resolution_deg,
+            margin_deg=request.margin_deg,
+            cache_bust=request.cache_bust,
+        )
+    except Exception as e:
+        logger.error(f"Atmosphere generation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "status": "success",
+        "zarr_id": zarr_id,
+        "zarr_path": final_path,
+        "download_url": f"/api/v1/atmosphere/download/{zarr_id}",
+        "source": request.source,
+    }
+
+
+@app.get("/api/v1/atmosphere/download/{zarr_id}")
+def download_atmosphere(zarr_id: str):
+    cache_dir = _atmosphere_cache_dir()
+    search_id = zarr_id if zarr_id.startswith("atm_") else f"atm_{zarr_id}"
+    zarr_path = os.path.join(cache_dir, f"{search_id}.zarr")
+    if not os.path.isdir(zarr_path):
+        raise HTTPException(status_code=404, detail="Atmosphere Zarr store not found.")
+    zip_path = os.path.join(cache_dir, f"{search_id}.zip")
+    if _zip_is_stale(zip_path, zarr_path):
+        shutil.make_archive(zip_path.replace(".zip", ""), "zip", zarr_path)
+    return FileResponse(
+        zip_path, media_type="application/zip", filename=f"{search_id}.zip"
+    )
+
+
 @app.get("/api/v2/coupled-boundaries/{region}")
 async def get_coupled_boundaries(
     region: str,

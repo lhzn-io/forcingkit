@@ -742,6 +742,81 @@ def dispatch_obc_request(
 _FULL_PRECISION_COORDS = ("lat", "lon", "z", "z_face")
 
 
+def atmosphere_key(
+    bbox: list[float],
+    start_time: str,
+    hours: int,
+    resolution_deg: float,
+    margin_deg: float,
+    source: str = "hrrr",
+) -> str:
+    """Cache id of an atmosphere delivery; the schema is part of it."""
+    import hashlib
+
+    from ecodata_cache.fetchers.hrrr_atmosphere import HRRR_ATM_SCHEMA
+
+    key = (
+        f"atm_{source}_{HRRR_ATM_SCHEMA}_{bbox[0]}_{bbox[1]}_{bbox[2]}_{bbox[3]}_"
+        f"{start_time}_{hours}_{resolution_deg}_{margin_deg}"
+    )
+    return "atm_" + hashlib.sha256(key.encode()).hexdigest()[:12]
+
+
+def dispatch_atmosphere_request(
+    bbox: list[float],
+    start_time: str,
+    hours: int,
+    zarr_path: str,
+    resolution_deg: float = 0.03,
+    margin_deg: float = 0.25,
+    cache_bust: bool = False,
+) -> str:
+    """HRRR prescribed atmosphere for `hours` from `start_time`, streamed to `zarr_path`."""
+    from ecodata_cache.fetchers import hrrr_atmosphere
+    from ecodata_cache.zarr_stream import StreamingZarrWriter, store_is_complete
+
+    if not cache_bust and store_is_complete(
+        zarr_path, (hrrr_atmosphere.HRRR_ATM_SCHEMA,)
+    ):
+        logger.info(f"Cache hit for atmosphere: {zarr_path}")
+        return zarr_path
+
+    writer = None
+    try:
+        for item in hrrr_atmosphere.iter_atmosphere(
+            start_time,
+            hours,
+            bbox,
+            resolution_deg=resolution_deg,
+            margin_deg=margin_deg,
+        ):
+            if item[0] == "static":
+                writer = StreamingZarrWriter(
+                    zarr_path,
+                    item[1],
+                    hrrr_atmosphere.RECORD_DIMS,
+                    expected_records=hours + 3,
+                    attrs=dict(item[1].attrs),
+                    record_attrs={
+                        k: {"units": u, "standard_name": sn}
+                        for k, (u, sn) in hrrr_atmosphere.UNITS.items()
+                    },
+                )
+                continue
+            if writer is None:
+                raise RuntimeError(
+                    "atmosphere records arrived before the static fields"
+                )
+            writer.append(item[1], item[2])
+        if writer is None:
+            raise RuntimeError("HRRR yielded no data")
+        return writer.close()
+    except Exception:
+        if writer is not None:
+            writer.abort()
+        raise
+
+
 def _stream_parent(
     module,
     zarr_path: str,
