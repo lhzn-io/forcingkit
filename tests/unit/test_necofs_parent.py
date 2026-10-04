@@ -114,3 +114,27 @@ def test_options_reach_only_fetchers_that_accept_them():
 
 def test_schema_tag_is_set():
     assert OBC_SCHEMA == "z-v2"
+
+
+def test_barycentric_weights_match_linear_nd_interpolation():
+    # The precomputed weights must reproduce scipy's LinearNDInterpolator, which they replace,
+    # including NaN outside the hull and leading (layer) dimensions.
+    from scipy.interpolate import LinearNDInterpolator
+    from scipy.spatial import Delaunay
+
+    from ecodata_cache.fetchers.necofs import Barycentric
+
+    rng = np.random.default_rng(0)
+    pts = rng.uniform(0.0, 1.0, (200, 2))
+    tri = Delaunay(pts)
+    gx, gy = np.meshgrid(np.linspace(-0.1, 1.1, 13), np.linspace(-0.1, 1.1, 11))
+    targets = np.column_stack((gx.ravel(), gy.ravel()))
+    interp = Barycentric(tri, targets, gx.shape)
+
+    values = rng.normal(size=(3, 200))
+    got = interp(values)
+    assert got.shape == (3,) + gx.shape
+    for k in range(3):
+        want = LinearNDInterpolator(tri, values[k])(targets).reshape(gx.shape)
+        np.testing.assert_allclose(got[k], want, rtol=1e-12, atol=1e-12, equal_nan=True)
+    assert np.isnan(got[0, 0, 0])  # (-0.1, -0.1) is outside the hull

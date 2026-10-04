@@ -614,7 +614,9 @@ def dispatch_obc_request(
             except Exception:
                 pass
 
-    if not cache_bust and os.path.exists(zarr_path):
+    from ecodata_cache.zarr_stream import store_is_complete
+
+    if not cache_bust and store_is_complete(zarr_path, (OBC_SCHEMA,)):
         logger.info(f"Cache hit for OBC: {zarr_path}")
         return zarr_path
 
@@ -628,6 +630,27 @@ def dispatch_obc_request(
     candidates_to_try = ranked if allow_donor_fallback else ranked[:1]
     for candidate_module, candidate_fetch_func, candidate_meta in candidates_to_try:
         logger.info(f"Trying OBC donor: {candidate_meta['name']}")
+        # A donor that can deliver hour by hour is streamed straight to disk and published only
+        # when complete; a failure there is an error, never a shorter store.
+        if hasattr(candidate_module, "iter_parent"):
+            try:
+                return _stream_parent(
+                    candidate_module,
+                    zarr_path,
+                    start_date,
+                    duration_hours,
+                    bbox,
+                    pad_cells=pad_cells,
+                    vertical_spacing_m=vertical_spacing_m,
+                    sponge_cells=sponge_cells,
+                )
+            except Exception as e:
+                if not allow_donor_fallback:
+                    raise RuntimeError(
+                        f"{candidate_meta['name']} parent delivery failed: {e}"
+                    ) from e
+                logger.warning(f"{candidate_meta['name']} parent delivery failed: {e}")
+                continue
         try:
             ds = candidate_fetch_func(
                 start_date,
@@ -717,6 +740,57 @@ def dispatch_obc_request(
 
 
 _FULL_PRECISION_COORDS = ("lat", "lon", "z", "z_face")
+
+
+def _stream_parent(
+    module,
+    zarr_path: str,
+    start_date: str,
+    duration_hours: int,
+    bbox: list[float],
+    pad_cells: int,
+    vertical_spacing_m: float,
+    sponge_cells: int,
+) -> str:
+    """Write a donor's `iter_parent` records to `zarr_path` one hour at a time."""
+    from ecodata_cache.zarr_stream import StreamingZarrWriter
+
+    writer = None
+    try:
+        for item in module.iter_parent(
+            start_date, duration_hours, bbox, pad_cells, vertical_spacing_m
+        ):
+            if item[0] == "static":
+                static = item[1]
+                attrs = dict(static.attrs)
+                attrs.update(
+                    source=module.__name__,
+                    duration_hours=duration_hours,
+                    sponge_cells=sponge_cells,
+                )
+                writer = StreamingZarrWriter(
+                    zarr_path,
+                    static,
+                    module.PARENT_RECORD_DIMS,
+                    expected_records=duration_hours,
+                    attrs=attrs,
+                    record_attrs={
+                        k: {"units": u, "standard_name": sn}
+                        for k, (u, sn) in module.PARENT_UNITS.items()
+                    },
+                )
+                continue
+            _, t, record = item
+            if writer is None:
+                raise RuntimeError("parent records arrived before the static fields")
+            writer.append(t, record)
+        if writer is None:
+            raise RuntimeError("the donor yielded no data")
+        return writer.close()
+    except Exception:
+        if writer is not None:
+            writer.abort()
+        raise
 
 
 def _supported_kwargs(func, **kwargs) -> dict:

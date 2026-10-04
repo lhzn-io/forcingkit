@@ -929,8 +929,10 @@ async def predict_obc_donor_endpoint(request: OBCRequest) -> Dict[str, Any]:
         return {"status": "error", "message": str(e), "donor": None}
 
 
+# Plain `def` for the long handlers: FastAPI runs them in its thread pool, so an hour-long parent
+# fetch no longer blocks every other request on the event loop.
 @app.post("/api/v1/obc")
-async def generate_obc(request: OBCRequest) -> Dict[str, Any]:
+def generate_obc(request: OBCRequest) -> Dict[str, Any]:
     bbox_list = [
         request.bbox.min_lon,
         request.bbox.min_lat,
@@ -954,7 +956,10 @@ async def generate_obc(request: OBCRequest) -> Dict[str, Any]:
     )
     zarr_path = os.path.join(cache_dir, zarr_name)
 
-    if not request.cache_bust and os.path.exists(zarr_path):
+    from ecodata_cache.fetchers.necofs import OBC_SCHEMA
+    from ecodata_cache.zarr_stream import store_is_complete
+
+    if not request.cache_bust and store_is_complete(zarr_path, (OBC_SCHEMA,)):
         return {
             "status": "cached",
             "zarr_id": zarr_id,
@@ -990,7 +995,7 @@ async def generate_obc(request: OBCRequest) -> Dict[str, Any]:
 
 
 @app.get("/api/v1/obc/download/{zarr_id}")
-async def download_obc(zarr_id: str):
+def download_obc(zarr_id: str):
     cache_dir = Path(
         os.environ.get(
             "COASTAL_SIM_DATA_CACHE_DIR",
