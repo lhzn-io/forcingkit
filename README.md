@@ -1,11 +1,11 @@
-# <img src="static/logo.svg" height="36" valign="middle" alt="Logo" /> forcingkit
+# <img src="https://raw.githubusercontent.com/lhzn-io/forcingkit/main/static/logo.svg" height="36" valign="middle" alt="Logo" /> forcingkit
 
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 <div align="center">
-  <img src="docs/source/_static/forcingkit-inventory-screenshot.png" alt="forcingkit Dashboard" />
+  <img src="https://raw.githubusercontent.com/lhzn-io/forcingkit/main/docs/source/_static/forcingkit-inventory-screenshot.png" alt="forcingkit Dashboard" />
 </div>
 
 Spatiotemporal forcing for computational Earth-system models: selects, regrids and serves model-ready time series with provenance.
