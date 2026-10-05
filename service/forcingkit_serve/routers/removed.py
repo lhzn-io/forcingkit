@@ -19,7 +19,7 @@ REMOVED_ON = datetime(2026, 10, 5, tzinfo=timezone.utc)
 DOCS_URL = "https://forcingkit.docs.lhzn.io/removed_endpoints.html"
 
 _PARENT = (
-    "POST /api/v1/obc: the parent ocean on true z (schema z-v2); its first record is the "
+    "POST /api/v1/obc: the parent ocean on true z (schema z-v3); its first record is the "
     "initial condition"
 )
 _ATMOSPHERE = (

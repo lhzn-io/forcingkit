@@ -18,7 +18,7 @@ and the routes then answer 404.
    * - Removed
      - Use instead
    * - ``POST /api/v1/ic/generate``, ``POST /api/v1/ic/regrid``
-     - ``POST /api/v1/obc``: the parent ocean on true z (schema ``z-v2``). Its first record is
+     - ``POST /api/v1/obc``: the parent ocean on true z (schema ``z-v3``). Its first record is
        the initial condition, already on regular lon/lat and fixed z levels, so no separate
        regrid step remains.
    * - ``POST /api/v1/ic/cache``, ``POST /api/v1/ic/predict-donor``,

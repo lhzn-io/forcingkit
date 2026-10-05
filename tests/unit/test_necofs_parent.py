@@ -1,4 +1,4 @@
-"""NECOFS parent-ocean delivery (schema z-v2): the vertical conversion, archive-file selection and
+"""NECOFS parent-ocean delivery (schema z-v3): the vertical conversion, archive-file selection and
 cache-key behaviour, on constructed data. No network.
 
 The conversion matters because the previous store labelled FVCOM sigma layers with fake depths in
@@ -113,7 +113,7 @@ def test_options_reach_only_fetchers_that_accept_them():
 
 
 def test_schema_tag_is_set():
-    assert OBC_SCHEMA == "z-v2"
+    assert OBC_SCHEMA == "z-v3"
 
 
 def test_barycentric_weights_match_linear_nd_interpolation():
@@ -138,3 +138,45 @@ def test_barycentric_weights_match_linear_nd_interpolation():
         want = LinearNDInterpolator(tri, values[k])(targets).reshape(gx.shape)
         np.testing.assert_allclose(got[k], want, rtol=1e-12, atol=1e-12, equal_nan=True)
     assert np.isnan(got[0, 0, 0])  # (-0.1, -0.1) is outside the hull
+
+
+def test_mesh_barycentric_leaves_land_between_elements_nan():
+    """Two triangles either side of a notch: a Delaunay triangulation of the four nodes would
+    bridge the notch, the mesh does not."""
+    from forcingkit.fetchers.necofs import MeshBarycentric
+
+    lon = np.array([0.0, 1.0, 0.0, 1.0, 0.5])
+    lat = np.array([0.0, 0.0, 1.0, 1.0, 0.2])
+    # Elements (0, 1, 4) along the bottom and (2, 4, 3) above leave the left and right gaps as land.
+    triangles = np.array([[0, 1, 4], [2, 4, 3]])
+    targets = np.array(
+        [
+            [0.5, 0.1],  # inside the bottom element
+            [0.5, 0.6],  # inside the top element
+            [0.1, 0.6],  # land: inside the nodes' convex hull, in no element
+            [2.0, 2.0],  # outside the mesh
+        ]
+    )
+    interp = MeshBarycentric(lon, lat, triangles, targets, (4,))
+    assert interp.inside.tolist() == [True, True, False, False]
+    # A linear field is reproduced exactly inside elements.
+    field = 2.0 * lon + 3.0 * lat + 1.0
+    out = interp(field)
+    expected = 2.0 * targets[:, 0] + 3.0 * targets[:, 1] + 1.0
+    np.testing.assert_allclose(out[:2], expected[:2], rtol=1e-12)
+    assert np.isnan(out[2:]).all()
+    # Leading dimensions (levels) pass through.
+    stacked = interp(np.vstack([field, 2 * field]))
+    np.testing.assert_allclose(stacked[1, :2], 2 * expected[:2], rtol=1e-12)
+
+
+def test_restrict_masks_element_fields_on_land():
+    from scipy.spatial import Delaunay
+
+    from forcingkit.fetchers.necofs import Barycentric
+
+    pts = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+    targets = np.array([[0.25, 0.25], [0.75, 0.75]])
+    interp = Barycentric(Delaunay(pts), targets, (2,)).restrict(np.array([True, False]))
+    out = interp(np.array([1.0, 1.0, 1.0, 1.0]))
+    assert out[0] == 1.0 and np.isnan(out[1])

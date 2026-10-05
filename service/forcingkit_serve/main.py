@@ -131,7 +131,7 @@ class OBCRequest(BaseModel):
     sponge_cells: int = 0
     include_tides: bool = True
     tidal_model: str = "GOT4.10c"
-    # Parent-ocean options (schema z-v2): donor cells of padding beyond the bbox, so the parent
+    # Parent-ocean options (schema z-v3): donor cells of padding beyond the bbox, so the parent
     # brackets the child, and the spacing of the fixed z levels.
     pad_cells: int = 3
     vertical_spacing_m: float = 2.0

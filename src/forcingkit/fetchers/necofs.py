@@ -60,7 +60,7 @@ def get_necofs_url(target_dt: pd.Timestamp) -> str:
 
 # Parent-ocean delivery schema. Bump when the layout or meaning of the boundary store changes, so
 # a cached store built under an older schema can never be served for a newer request.
-OBC_SCHEMA = "z-v2"
+OBC_SCHEMA = "z-v3"
 
 
 def necofs_archive_file_date(t: pd.Timestamp) -> pd.Timestamp:
@@ -145,11 +145,54 @@ class Barycentric:
         self.vertices = tri.simplices[s]
         self.shape = shape
 
+    def restrict(self, inside: np.ndarray) -> "Barycentric":
+        """Also treat targets outside `inside` (flat, one per target) as outside."""
+        self.inside = self.inside & inside
+        return self
+
     def __call__(self, values: np.ndarray) -> np.ndarray:
         values = np.asarray(values, dtype=np.float64)
         out = np.einsum("...pk,pk->...p", values[..., self.vertices], self.weights)
         out[..., ~self.inside] = np.nan
         return out.reshape(values.shape[:-1] + self.shape)
+
+
+class MeshBarycentric(Barycentric):
+    """Linear interpolation on the triangles of an unstructured mesh, as FVCOM itself interpolates
+    node values within an element.
+
+    A Delaunay triangulation of the mesh nodes also covers land between them (a peninsula, an
+    island, the coast between two estuaries) and fills it with values blended across it. Here a
+    target takes values only from the mesh element that contains it, and a target inside no
+    element (land, or outside the mesh) is NaN. `triangles` are zero-based node indices, one row
+    per element.
+    """
+
+    def __init__(
+        self,
+        lon: np.ndarray,
+        lat: np.ndarray,
+        triangles: np.ndarray,
+        targets: np.ndarray,
+        shape: tuple[int, ...],
+    ):
+        from matplotlib.tri import Triangulation
+
+        mesh = Triangulation(lon, lat, triangles)
+        element = np.asarray(mesh.get_trifinder()(targets[:, 0], targets[:, 1]))
+        self.inside = element >= 0
+        self.vertices = triangles[np.where(self.inside, element, 0)]
+        x, y = lon[self.vertices], lat[self.vertices]
+        # Barycentric coordinates of each target in its element.
+        det = (y[:, 1] - y[:, 2]) * (x[:, 0] - x[:, 2]) + (x[:, 2] - x[:, 1]) * (
+            y[:, 0] - y[:, 2]
+        )
+        det = np.where(self.inside, det, 1.0)
+        dx, dy = targets[:, 0] - x[:, 2], targets[:, 1] - y[:, 2]
+        b0 = ((y[:, 1] - y[:, 2]) * dx + (x[:, 2] - x[:, 1]) * dy) / det
+        b1 = ((y[:, 2] - y[:, 0]) * dx + (x[:, 0] - x[:, 2]) * dy) / det
+        self.weights = np.column_stack([b0, b1, 1.0 - b0 - b1])
+        self.shape = shape
 
 
 PARENT_RECORD_DIMS = {
@@ -212,7 +255,9 @@ def iter_parent(
     parent brackets the child. The vertical axis is true depth: each FVCOM sigma layer is placed at
     z = siglay * (h + zeta) + zeta for its column and interpolated onto fixed levels every
     `vertical_spacing_m` metres, ordered bottom to top. Land, points outside the mesh and levels
-    below the sea floor are NaN.
+    below the sea floor are NaN. Land is what lies inside no element of the NECOFS mesh: node
+    fields are interpolated within the containing element, and element fields (u, v) are NaN
+    wherever the node mesh is.
 
     Raises rather than returning a short record: an unreachable archive file, a missing hour or a
     failed interpolation ends the delivery with an error.
@@ -259,16 +304,15 @@ def iter_parent(
             logger.info(
                 "Building NECOFS parent interpolation weights and vertical grid..."
             )
-            at_node = Barycentric(
-                Delaunay(np.column_stack((ds["lon"].values, ds["lat"].values))),
-                target_pts,
-                shape,
-            )
+            node_lon = np.asarray(ds["lon"].values, dtype=np.float64)
+            node_lat = np.asarray(ds["lat"].values, dtype=np.float64)
+            triangles = np.asarray(ds["nv"].values).T.astype(np.int64) - 1
+            at_node = MeshBarycentric(node_lon, node_lat, triangles, target_pts, shape)
             at_elem = Barycentric(
                 Delaunay(np.column_stack((ds["lonc"].values, ds["latc"].values))),
                 target_pts,
                 shape,
-            )
+            ).restrict(at_node.inside)
             h_grid = at_node(ds["h"].values)
             siglay_grid = at_node(np.asarray(ds["siglay"].values))  # surface first
             if not np.any(np.isfinite(h_grid)):
