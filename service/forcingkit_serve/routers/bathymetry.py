@@ -1,4 +1,3 @@
-import os
 import hashlib
 import httpx
 import logging
@@ -15,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 async def stream_remote_file(url: str):
     """
-    Passthrough proxy stream for local TopoBathySim setups to prevent local disk double-caching.
+    Passthrough proxy stream for local topobathykit setups to prevent local disk double-caching.
     Large timeout applied because fusing geospatial data can take 5+ minutes.
     """
     client = httpx.AsyncClient()
@@ -28,7 +27,7 @@ async def stream_remote_file(url: str):
         await client.aclose()
         raise HTTPException(
             status_code=response.status_code,
-            detail=f"TopoBathySim Error: {response.text}",
+            detail=f"topobathykit Error: {response.text}",
         )
 
     async def cleanup():
@@ -52,11 +51,11 @@ async def fuse_bathymetry(
     format: str = Query("zarr", description="Output format: geotiff or zarr"),
 ):
     """
-    Smart proxy for TopoBathySim that retrieves fused topography.
-    If TopoBathySim is on a remote cluster, this caches the zipped output locally
+    Smart proxy for topobathykit that retrieves fused topography.
+    If topobathykit is on a remote cluster, this caches the zipped output locally
     in forcingkit so future identical runs bypass the network.
     """
-    topobathy_url = os.environ.get("TOPOBATHYSIM_URL", "http://localhost:9595").rstrip(
+    topobathy_url = settings.env("TOPOBATHYKIT_URL", "http://localhost:9595").rstrip(
         "/"
     )
     target_url = f"{topobathy_url}/fuse?west={west}&south={south}&east={east}&north={north}&resolution={resolution}&format={format}"
@@ -69,24 +68,24 @@ async def fuse_bathymetry(
 
     if is_local:
         logger.info(
-            f"TopoBathySim is local ({topobathy_url}). Streaming directly to avoid disk duplication."
+            f"topobathykit is local ({topobathy_url}). Streaming directly to avoid disk duplication."
         )
         try:
             return await stream_remote_file(target_url)
         except httpx.ConnectError:
             raise HTTPException(
                 status_code=502,
-                detail=f"TopoBathySim is unreachable at {topobathy_url}. Please ensure the service is running on port 9595.",
+                detail=f"topobathykit is unreachable at {topobathy_url}. Please ensure the service is running on port 9595.",
             )
         except httpx.ReadTimeout:
             raise HTTPException(
                 status_code=504,
-                detail=f"TopoBathySim at {topobathy_url} timed out during fusion.",
+                detail=f"topobathykit at {topobathy_url} timed out during fusion.",
             )
 
     # --- IF REMOTE, Cache Strategy is Engaged ---
     logger.info(
-        f"TopoBathySim is remote ({topobathy_url}). Entering proxy-cache routine."
+        f"topobathykit is remote ({topobathy_url}). Entering proxy-cache routine."
     )
     cache_dir = Path(settings.cache_dir()).expanduser() / "bathymetry"
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -106,7 +105,7 @@ async def fuse_bathymetry(
 
     # Download and cache it
     logger.info(
-        f"Cache miss. Fetching from remote TopoBathySim and writing to {cache_path}..."
+        f"Cache miss. Fetching from remote topobathykit and writing to {cache_path}..."
     )
     try:
         async with httpx.AsyncClient(timeout=3600.0) as client:
@@ -115,7 +114,7 @@ async def fuse_bathymetry(
                     text = await response.aread()
                     raise HTTPException(
                         status_code=response.status_code,
-                        detail=f"TopoBathySim Error: {text.decode('utf-8')}",
+                        detail=f"topobathykit Error: {text.decode('utf-8')}",
                     )
 
                 # Stream directly to disk
@@ -144,7 +143,7 @@ class FusionRequest(BaseModel):
 
 @router.post("/fuse")
 async def fuse_bathymetry_post(request: FusionRequest):
-    topobathy_url = os.environ.get("TOPOBATHYSIM_URL", "http://localhost:9595").rstrip(
+    topobathy_url = settings.env("TOPOBATHYKIT_URL", "http://localhost:9595").rstrip(
         "/"
     )
     target_url = f"{topobathy_url}/fuse"
@@ -163,12 +162,12 @@ async def fuse_bathymetry_post(request: FusionRequest):
         except httpx.ConnectError:
             raise HTTPException(
                 status_code=502,
-                detail=f"TopoBathySim is unreachable at {topobathy_url}. Please ensure the service is running on port 9595.",
+                detail=f"topobathykit is unreachable at {topobathy_url}. Please ensure the service is running on port 9595.",
             )
         except httpx.ReadTimeout:
             raise HTTPException(
                 status_code=504,
-                detail=f"TopoBathySim at {topobathy_url} timed out during fusion.",
+                detail=f"topobathykit at {topobathy_url} timed out during fusion.",
             )
 
         if response.status_code != 200:
@@ -177,7 +176,7 @@ async def fuse_bathymetry_post(request: FusionRequest):
             await client.aclose()
             raise HTTPException(
                 status_code=response.status_code,
-                detail=f"TopoBathySim Error: {text.decode('utf-8')}",
+                detail=f"topobathykit Error: {text.decode('utf-8')}",
             )
 
         async def cleanup():
@@ -191,7 +190,7 @@ async def fuse_bathymetry_post(request: FusionRequest):
         )
 
     logger.info(
-        f"TopoBathySim is remote ({topobathy_url}). Entering proxy-cache routine."
+        f"topobathykit is remote ({topobathy_url}). Entering proxy-cache routine."
     )
     cache_dir = Path(settings.cache_dir()).expanduser() / "bathymetry"
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -216,7 +215,7 @@ async def fuse_bathymetry_post(request: FusionRequest):
         )
 
     logger.info(
-        f"Cache miss. Fetching from remote TopoBathySim and writing to {cache_path}..."
+        f"Cache miss. Fetching from remote topobathykit and writing to {cache_path}..."
     )
     try:
         async with httpx.AsyncClient(timeout=3600.0) as client:
@@ -227,7 +226,7 @@ async def fuse_bathymetry_post(request: FusionRequest):
                     text = await response.aread()
                     raise HTTPException(
                         status_code=response.status_code,
-                        detail=f"TopoBathySim Error: {text.decode('utf-8')}",
+                        detail=f"topobathykit Error: {text.decode('utf-8')}",
                     )
                 with open(cache_path, "wb") as f_out:
                     async for chunk in response.aiter_bytes(chunk_size=8192):

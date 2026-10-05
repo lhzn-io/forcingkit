@@ -17,6 +17,8 @@ logger = logging.getLogger("forcingkit")
 LEGACY_ENV: dict[str, tuple[str, ...]] = {
     "FORCINGKIT_CACHE_DIR": ("ECODATA_CACHE_CACHE_DIR", "COASTAL_SIM_DATA_CACHE_DIR"),
     "FORCINGKIT_MAX_WORKERS": ("ECODATA_CACHE_MAX_WORKERS",),
+    # The elevation service, renamed topobathysim -> topobathykit on 2026-10-05.
+    "TOPOBATHYKIT_URL": ("TOPOBATHYSIM_URL",),
 }
 
 DEFAULT_CACHE_DIR = Path("~/.cache/forcingkit")

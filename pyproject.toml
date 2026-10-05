@@ -37,7 +37,7 @@ dependencies = [
 # so upgrading the tool no longer silently redefines what "clean" means.
 #
 # E4/E7/E9 + F reproduces the rule set this code has actually been linted
-# against to date. Broadening it (topobathysim additionally selects I, B, UP, N,
+# against to date. Broadening it (topobathykit additionally selects I, B, UP, N,
 # SIM and RUF) is a deliberate decision to take separately, with the resulting
 # findings reviewed rather than absorbed by a version bump.
 [tool.ruff.lint]

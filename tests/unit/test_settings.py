@@ -9,6 +9,8 @@ ALL_NAMES = [
     "ECODATA_CACHE_CACHE_DIR",
     "COASTAL_SIM_DATA_CACHE_DIR",
     "FORCINGKIT_MAX_WORKERS",
+    "TOPOBATHYKIT_URL",
+    "TOPOBATHYSIM_URL",
     "ECODATA_CACHE_MAX_WORKERS",
 ]
 
@@ -63,3 +65,15 @@ def test_max_workers(clean_env, monkeypatch):
         assert settings.max_workers() == 2
     monkeypatch.setenv("FORCINGKIT_MAX_WORKERS", "8")
     assert settings.max_workers() == 8
+
+
+def test_topobathykit_url_reads_the_old_name(clean_env, monkeypatch):
+    monkeypatch.delenv("TOPOBATHYKIT_URL", raising=False)
+    monkeypatch.setenv("TOPOBATHYSIM_URL", "http://old:9595")
+    with pytest.warns(
+        FutureWarning, match="TOPOBATHYSIM_URL is deprecated; use TOPOBATHYKIT_URL"
+    ):
+        assert (
+            settings.env("TOPOBATHYKIT_URL", "http://localhost:9595")
+            == "http://old:9595"
+        )

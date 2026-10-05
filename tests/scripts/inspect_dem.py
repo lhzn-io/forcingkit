@@ -2,7 +2,7 @@ import zarr
 import numpy as np
 
 ds = zarr.open(
-    "/home/lhzn/Projects/lhzn-io/coastal-sim/config/topobathysim/policies/throgs_neck_dem.zarr",
+    "/home/lhzn/Projects/lhzn-io/coastal-sim/config/topobathykit/policies/throgs_neck_dem.zarr",
     mode="r",
 )
 elev = ds["elevation"][:]  # type: ignore
