@@ -22,8 +22,9 @@ guidance in this repository.
 ## Repository Focus
 
 Ecodata Cache is a Python microservice that fetches, harmonizes, regrids, and serves
-real-time and historical coastal boundary conditions, initial conditions, and structural
-nudging telemetry to the `coastal-sim` Julia physics engine.
+real-time and historical forcing to the `coastal-sim` Julia physics engine: the parent
+ocean (`/api/v1/obc`, schema z-v2), the HRRR atmosphere (`/api/v1/atmosphere`), tides,
+and station telemetry and NDBC observations for validation.
 
 ## Core Rules
 
@@ -50,14 +51,11 @@ nudging telemetry to the `coastal-sim` Julia physics engine.
 
 - **Grid normalization**: Elevations and water levels are positive up. Normalize
   external dataset quirks at the fetcher tier - never let them propagate into the
-  dispatcher or regridder.
+  dispatcher.
 - **OPeNDAP access**: Use the `pydap` engine (`engine="pydap"`) for all THREDDS/OPeNDAP
   endpoints. Prefer `.csvp` endpoints for tabular time-series to avoid NetCDF overhead.
 - **C-grid stagger**: NYOFS (POM) uses an Arakawa C-grid. Interpolation to rho-points
   must be done in the fetcher before returning data to the dispatcher.
-- **Tidal Harmonics**: HYCOM provides subtidal OBCs. The service provides raw
-  GOT4.10c (default) or EOT20 harmonic constituents (amplitudes, phases) via
-  `fetchers/tides_tmd.py`.
 - **Precision**: Output arrays should default to `float32` (`<f4`) and use Little-Endian
   endianness for compatibility with `Zarr.jl` and `Oceananigans.jl`.
 

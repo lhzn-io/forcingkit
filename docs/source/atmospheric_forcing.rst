@@ -37,8 +37,7 @@ Summary
      - 1 h
      - 1940 to present
      - ERA5T about 5 days; final ERA5 2 to 3 months
-     - **NumericalEarth** ``ERA5PrescribedAtmosphere`` (coastal-sim ``atmosphere = "era5"``);
-       ecodata-cache has a wind-and-pressure-only fetcher for the legacy ``/bc`` path
+     - **NumericalEarth** ``ERA5PrescribedAtmosphere`` (coastal-sim ``atmosphere = "era5"``)
    * - **RRFS v1** (NOAA NCEP)
      - Hourly-cycling forecast, FV3 limited-area, 3 km
      - 3 km, North America
@@ -185,14 +184,6 @@ Choosing
        established in operations
    * - Multi-decade or climate-scale forcing
      - ERA5, or JRA55-do through NumericalEarth (to 2019 in its catalogue)
-
-Relation to the legacy ``/bc`` path
------------------------------------
-
-``/api/v1/bc/generate`` predates the atmosphere endpoint. It delivers HRRR 10 m wind only, on the
-native Lambert grid, from the 00 UTC cycle of the start date, and stops silently past f48; see
-:doc:`fetchers`. It remains for the viewer and other consumers of that format. Ocean models should
-use ``/api/v1/atmosphere``.
 
 References
 ----------

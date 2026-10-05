@@ -4,7 +4,6 @@ services:
     ports:
       - "9598:9598"
     volumes:
-      - ~/.cdsapirc:/root/.cdsapirc:ro
       - ./data:/app/data
     env_file:
       - .env

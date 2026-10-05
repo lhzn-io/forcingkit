@@ -41,21 +41,6 @@ def _normalize_lons(lons: np.ndarray) -> np.ndarray:
     return np.where(lons < 0, lons + 360, lons)
 
 
-def fetch_hycom_initial_conditions(
-    target_date: str,
-    bbox: list[float],
-) -> Optional[xr.Dataset]:
-    """
-    Fetches 3D Initial Conditions (u, v, temp, salt) from the HYCOM Global Ocean Forecasting System.
-    """
-    target_dt = pd.to_datetime(target_date).tz_localize(None)
-    dataset_url = _get_hycom_url(target_dt)
-
-    return _fetch_hycom_data(
-        target_dt, target_dt + pd.Timedelta(hours=1), bbox, dataset_url, is_ic=True
-    )
-
-
 def fetch_hycom_boundary_conditions(
     start_date: str,
     duration_hours: int,

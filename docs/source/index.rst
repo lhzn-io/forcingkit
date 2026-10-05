@@ -2,7 +2,7 @@ Ecodata Cache Documentation
 ==============================
 
 ``Ecodata Cache`` is a Python-based microservice designed to fetch, harmonize,
-and serve multi-domain Earth-system observations, atmospheric telemetry, and oceanic boundary and initial conditions for high-fidelity coupled physical simulations.
+and serve multi-domain Earth-system observations, atmospheric telemetry, and parent-ocean boundary conditions for high-fidelity coupled physical simulations.
 
 It acts as a caching proxy designed to alleviate the complexities of remote netCDF, OPeNDAP, and HRRR queries by producing robust local Zarr caches that can be seamlessly consumed by external computational systems.
 
@@ -13,4 +13,4 @@ It acts as a caching proxy designed to alleviate the complexities of remote netC
    fetchers
    atmospheric_forcing
    nyofs
-   tidal_harmonics
+   removed_endpoints

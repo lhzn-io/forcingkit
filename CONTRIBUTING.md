@@ -16,7 +16,7 @@ We use `uv` for Python package management.
 
 - All code must pass `ruff` (for formatting and linting) and `mypy` (for typing).
 - Ensure your changes are covered by tests where applicable (we use `pytest`). Tests are located in the `tests/` directory.
-- `ecodata_cache.fetchers` logic handles API integrations. If adding a new telemetry source (e.g., a new regional IOOS node), follow the patterns established in `maracoos.py` or `neracoos.py`.
+- `ecodata_cache.fetchers` logic handles API integrations. If adding a new telemetry source (e.g., a new regional IOOS node), follow the patterns established in `ndbc.py` (observations) or `dbofs.py` (a parent ocean).
 - Keep the Sphinx documentation up to date.
 
 ### 3. Pull Requests

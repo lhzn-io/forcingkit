@@ -189,148 +189,6 @@ class TestResolveVar:
             dbofs._resolve_var(ds, "u")
 
 
-class TestInitialConditions:
-    """Test IC fetcher logic (mocked OPeNDAP)."""
-
-    @patch("ecodata_cache.fetchers.dbofs._open_dbofs_dataset")
-    def test_fetch_dbofs_ic_success(self, mock_open):
-        """Successful IC fetch returns dataset with u, v, temp, salt, zeta."""
-        nk, neta, nxi = 20, 40, 50
-
-        mock_ds = xr.Dataset(
-            data_vars={
-                "u": (
-                    ("s_rho", "eta_rho", "xi_rho"),
-                    np.random.rand(nk, neta, nxi).astype(np.float32),
-                ),
-                "v": (
-                    ("s_rho", "eta_rho", "xi_rho"),
-                    np.random.rand(nk, neta, nxi).astype(np.float32),
-                ),
-                "temp": (
-                    ("s_rho", "eta_rho", "xi_rho"),
-                    (np.random.rand(nk, neta, nxi) + 12).astype(np.float32),
-                ),
-                "salt": (
-                    ("s_rho", "eta_rho", "xi_rho"),
-                    (np.random.rand(nk, neta, nxi) + 30).astype(np.float32),
-                ),
-                "zeta": (
-                    ("eta_rho", "xi_rho"),
-                    np.random.rand(neta, nxi).astype(np.float32),
-                ),
-                "lon_rho": (
-                    ("eta_rho", "xi_rho"),
-                    np.linspace(-75.0, -74.0, neta * nxi)
-                    .reshape(neta, nxi)
-                    .astype(np.float32),
-                ),
-                "lat_rho": (
-                    ("eta_rho", "xi_rho"),
-                    np.linspace(38.5, 39.5, neta * nxi)
-                    .reshape(neta, nxi)
-                    .astype(np.float32),
-                ),
-                "mask_rho": (("eta_rho", "xi_rho"), np.ones((neta, nxi))),
-            },
-            coords={"s_rho": np.linspace(-1, 0, nk)},
-        )
-        mock_open.return_value = mock_ds
-
-        result = dbofs.fetch_dbofs_initial_conditions(
-            "2026-03-02T05:00:00Z", [-75.0, 38.5, -74.0, 39.5]
-        )
-
-        assert result is not None
-        assert set(result.data_vars) >= {"u", "v", "temp", "salt", "zeta"}
-        assert result.u.dtype == np.float32
-
-    @patch("ecodata_cache.fetchers.dbofs._open_dbofs_dataset")
-    def test_fetch_dbofs_ic_returns_none_when_no_temp_salt(self, mock_open):
-        """IC fetch returns None when dataset lacks temp/salt (currents-only endpoint)."""
-        mock_ds = xr.Dataset(
-            data_vars={
-                "u": (("s_rho", "eta_rho", "xi_rho"), np.ones((5, 10, 10))),
-                "v": (("s_rho", "eta_rho", "xi_rho"), np.ones((5, 10, 10))),
-                "zeta": (("eta_rho", "xi_rho"), np.zeros((10, 10))),
-                "lon_rho": (
-                    ("eta_rho", "xi_rho"),
-                    np.linspace(-75.0, -74.0, 100).reshape(10, 10),
-                ),
-                "lat_rho": (
-                    ("eta_rho", "xi_rho"),
-                    np.linspace(38.5, 39.5, 100).reshape(10, 10),
-                ),
-            },
-        )
-        mock_open.return_value = mock_ds
-
-        result = dbofs.fetch_dbofs_initial_conditions(
-            "2026-03-02T05:00:00Z", [-75.0, 38.5, -74.0, 39.5]
-        )
-
-        assert result is None
-
-    def test_fetch_dbofs_ic_outside_bbox(self):
-        """IC fetch returns None for out-of-domain bbox."""
-        result = dbofs.fetch_dbofs_initial_conditions(
-            "2026-03-02T05:00:00Z", [-70.0, 43.0, -69.0, 44.0]
-        )
-        assert result is None
-
-    @patch("ecodata_cache.fetchers.dbofs._open_dbofs_dataset")
-    def test_fetch_dbofs_ic_delaware_bbox(self, mock_open):
-        """IC fetch works for the delaware bbox."""
-        nk, neta, nxi = 10, 15, 18
-        mock_ds = xr.Dataset(
-            data_vars={
-                "u": (
-                    ("s_rho", "eta_rho", "xi_rho"),
-                    np.random.rand(nk, neta, nxi).astype(np.float32),
-                ),
-                "v": (
-                    ("s_rho", "eta_rho", "xi_rho"),
-                    np.random.rand(nk, neta, nxi).astype(np.float32),
-                ),
-                "temp": (
-                    ("s_rho", "eta_rho", "xi_rho"),
-                    (np.random.rand(nk, neta, nxi) + 10).astype(np.float32),
-                ),
-                "salt": (
-                    ("s_rho", "eta_rho", "xi_rho"),
-                    (np.random.rand(nk, neta, nxi) + 30).astype(np.float32),
-                ),
-                "zeta": (
-                    ("eta_rho", "xi_rho"),
-                    np.random.rand(neta, nxi).astype(np.float32),
-                ),
-                "lon_rho": (
-                    ("eta_rho", "xi_rho"),
-                    np.linspace(-75.5, -74.5, neta * nxi)
-                    .reshape(neta, nxi)
-                    .astype(np.float32),
-                ),
-                "lat_rho": (
-                    ("eta_rho", "xi_rho"),
-                    np.linspace(38.5, 39.5, neta * nxi)
-                    .reshape(neta, nxi)
-                    .astype(np.float32),
-                ),
-                "mask_rho": (("eta_rho", "xi_rho"), np.ones((neta, nxi))),
-            },
-            coords={"s_rho": np.linspace(-1, 0, nk)},
-        )
-        mock_open.return_value = mock_ds
-
-        result = dbofs.fetch_dbofs_initial_conditions(
-            "2026-03-02T05:00:00Z", [-75.5, 38.5, -74.5, 39.5]
-        )
-
-        assert result is not None
-        assert "temp" in result.data_vars
-        assert "salt" in result.data_vars
-
-
 class TestBoundaryConditions:
     """Test OBC fetcher logic (mocked OPeNDAP)."""
 
@@ -397,31 +255,12 @@ class TestBoundaryConditions:
 class TestDispatcherRegistration:
     """Test DBOFS registration in the dispatcher."""
 
-    def test_dbofs_in_ic_fetchers(self):
-        """DBOFS must appear in IC fetchers."""
-        from ecodata_cache.dispatcher import get_ic_fetchers
-
-        ids = [m.get_metadata()["id"] for m, _ in get_ic_fetchers()]
-        assert "dbofs" in ids
-
     def test_dbofs_in_obc_fetchers(self):
         """DBOFS must appear in OBC fetchers."""
         from ecodata_cache.dispatcher import get_obc_fetchers
 
         ids = [m.get_metadata()["id"] for m, _ in get_obc_fetchers()]
         assert "dbofs" in ids
-
-    def test_delaware_bay_(self):
-        """DBOFS (8.75°²) must outrank NECOFS (132°²) for -75.5, 38.5, -74.5, 39.5 bbox."""
-        from ecodata_cache.dispatcher import _rank_ic_candidates
-
-        bbox = [-75.5, 38.5, -74.5, 39.5]
-        ranked = _rank_ic_candidates(bbox)
-
-        assert len(ranked) > 0
-        assert ranked[0][2]["id"] == "dbofs", (
-            f"Expected DBOFS as top IC donor, got {ranked[0][2]['id']}"
-        )
 
     def test_dbofs_ranks_above_necofs_for_obc_delaware_bay(self):
         """DBOFS must outrank NECOFS for OBC on the delaware bay bbox."""
@@ -435,20 +274,6 @@ class TestDispatcherRegistration:
         assert ids.index("dbofs") < ids.index("necofs"), (
             f"DBOFS should rank before NECOFS in OBC. Order: {ids}"
         )
-
-    def test_nyofs_not_in_ic_fetchers(self):
-        """NYOFS must remain excluded from IC fetchers."""
-        from ecodata_cache.dispatcher import get_ic_fetchers
-
-        ids = [m.get_metadata()["id"] for m, _ in get_ic_fetchers()]
-        assert "nyofs" not in ids
-
-    def test_hycom_still_registered_as_fallback(self):
-        """HYCOM must remain the global IC fallback."""
-        from ecodata_cache.dispatcher import get_ic_fetchers
-
-        ids = [m.get_metadata()["id"] for m, _ in get_ic_fetchers()]
-        assert "hycom" in ids
 
 
 if __name__ == "__main__":

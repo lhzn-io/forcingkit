@@ -2,9 +2,9 @@
 
 ## Mission
 
-Python microservice providing real-time and historical coastal boundary conditions,
-initial conditions, and structural nudging telemetry to the `coastal-sim` Julia
-physics engine.
+Python microservice providing real-time and historical forcing (the parent ocean and
+the HRRR atmosphere) and validation observations to the `coastal-sim` Julia physics
+engine.
 
 ## Environment
 
@@ -20,32 +20,28 @@ physics engine.
 HTTP Request → service/ecodata_serve/main.py
              → src/ecodata_cache/dispatcher.py
              → fetchers/*.py
-             → regridder.py
              → Zarr (~/.cache/ecodata-cache/)
 ```
 
 - **Entry point**: `service/ecodata_serve/main.py` — FastAPI application.
 - **Dispatcher**: `src/ecodata_cache/dispatcher.py` — interprets
   requests and routes to the appropriate fetcher via tiered fallback.
-  Uses `_rank_ic_candidates(bbox)` to select the best IC source by
+  Uses `_rank_obc_candidates(bbox)` to select the best parent by
   resolution and domain overlap.
 - **Fetchers**: `src/ecodata_cache/fetchers/` — isolated modules per data source.
-- **Regridder**: `src/ecodata_cache/regridder.py` — spatial
-  interpolation to CF-compliant xarray Zarr stores.
 
-## Fetcher Tier (IC/OBC Priority Order)
+## Fetcher Tier (Parent Ocean Priority Order)
 
 | Fetcher | Resolution | Domain | Notes |
 |---|---|---|---|
 | `nyofs.py` | ~100 m | NY/NJ Harbor | POM curvilinear grid, C-grid stagger |
 | `necofs.py` | ~200 m | New England | FVCOM unstructured |
-| `tides_tmd.py` | ~0.1° | Global | GOT4.10c/EOT20 pyTMD harmonics; raw amplitudes and phases |
 | `hycom.py` | ~9 km | Global | Final fallback (Operational + Historical) |
 
 *Note: Because the architecture is modular, a future roadmap item includes the integration of TPXO (via `tpxo.py`) given usage rights.*
 
-Atmospheric forcing: HRRR (18h) → ERA5T (3mo) → ERA5 (Historical).
-Volumetric atmospheric forcing (3D) is provided by ERA5 Pressure Levels.
+Atmospheric forcing: HRRR from 2014-07-30 (`hrrr_atmosphere.py`, `/api/v1/atmosphere`).
+Earlier runs use ERA5 through NumericalEarth in coastal-sim, not this service.
 
 ## Testing
 
@@ -93,7 +89,6 @@ uv run python -c "from ecodata_cache.fetchers import nyofs; print(nyofs.get_meta
 - **Mocking strategy**: Dispatcher unit tests check tuple/dict return
   boundaries carefully. When modifying mocked fetchers, track
   keyword-argument vs positional argument boundaries.
-- **GOT4.10c/EOT20 model files must be downloaded separately** — fetcher raises `RuntimeError` with instructions if absent; model directory read from `PYTMD_DATA_DIR` env var or `~/.pytmd/`
 - **Grid normalization**: `coastal-sim` expects elevations positive
   up (LMSL/NAVD88). Normalize any inverted datasets in the fetcher
   tier before the dispatcher sees them.

@@ -10,9 +10,9 @@
 
 `EcodataCache` is a highly-optimized Earth-system proxy, designed for coupling multi-domain environmental physics into high-fidelity unified simulations.
 
-It operates primarily as a high-speed data acquisition and spatiotemporal transformation service, sitting between large-scale operational forecasting endpoints (NOAA, Copernicus ERA5, HRRR, HYCOM, IOOS Regional Nodes) and native solvers like `Oceananigans.jl`.
+It operates primarily as a high-speed data acquisition and spatiotemporal transformation service, sitting between large-scale operational forecasting endpoints (NOAA HRRR, NECOFS, NOAA OFS, HYCOM, NDBC, CO-OPS) and native solvers like `Oceananigans.jl`.
 
-From serving tidal harmonic constituents to delivering atmospheric boundary layer fields, this application strips away the complexity of federated, heterogeneous climate data.
+It delivers a model's parent ocean on true z levels and its HRRR surface atmosphere on a regular grid, plus station observations for validation.
 
 ## Goals
 
@@ -26,15 +26,12 @@ The primary goal of Ecodata Cache is to provide clean, standardized ocean and at
 
 - **Decoupled System Architecture**: The microservice guarantees reproducible datasets by deterministic hashing, providing standardized local representations of external APIs.
 - **Continuous Coupled Hindcasts**: Support for 45-to-60-day continuous hindcasts by dynamically stitching historical and operational HYCOM experiments.
-- **Volumetric Forcing API**: ERA5 pressure-level fetching for u, v, w, T, Z, and specific humidity.
-- **Tidal Extrapolation**: Access to high-resolution global harmonic predictors via PyTMD (`GOT4.10c` & `EOT20`) returned via standard API endpoints without complex spatial assembly.
 - **Temporal Alignment**: Automated CF-compliant hourly interpolation across heterogeneous upstream timestamps and grid frequencies.
 
 ## Current Coverage
 
 - **Oceanic Forcing**: NYOFS, NECOFS, DBOFS, HYCOM (Operational & Historical).
-- **Atmospheric Forcing**: HRRR (3km surface), ERA5 (30km volumetric & surface retro-scaling).
-- **Tidal Harmonics**: GOT4.10c (Default, ~0.5°), EOT20 (~0.125°).
+- **Atmospheric Forcing**: HRRR (3 km, hourly, 2014-07-30 to present), regridded to 0.03 degrees.
 
 ## Roadmap
 
@@ -47,7 +44,7 @@ The primary goal of Ecodata Cache is to provide clean, standardized ocean and at
 The service exposes HTTP APIs (via FastAPI/Uvicorn) which:
 
 1. Deterministically hash bounding boxes and time windows to generate an automated local Zarr cache (`~/.cache/ecodata-cache`).
-2. Dispatch fetch operations via tiered fallback chains for high-availability. (e.g. HRRR -> ERA5T -> ERA5 for atmospheric conditions).
+2. Dispatch fetch operations via tiered fallback chains for high-availability. (e.g. DBOFS or NYOFS -> NECOFS -> HYCOM for the parent ocean).
 3. Standardize dimensions, bounds, floating-point precision, and timezone offsets, providing a direct ingestion path for downstream coupled engines.
 
 ## Setup

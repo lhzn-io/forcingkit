@@ -81,20 +81,11 @@ Bathymetric Depth        ``depth``      At rho-points (cell centers)
 Processing Pipeline
 -------------------
 
-Initial Conditions (IC)
-~~~~~~~~~~~~~~~~~~~~~~~
-
-1. **Load** NYOFS snapshot at time T
-2. **Spatial Subset** via 2D curvilinear mask (bbox + land mask)
-3. **C-Grid → Rho Interpolation** (average staggered u, v to cell centers)
-4. **Sigma → Pseudo-Depth** (map 20 sigma layers to uniform depth range)
-5. **Output** xarray Dataset with dims ``(sigma, eta, xi)``
-
 Open Boundary Conditions (OBC)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 1. **Load & Concatenate** NYOFS hourly files spanning [start_date, start_date + duration_hours]
-2. **Spatial Subset** via 2D curvilinear mask (same as IC)
+2. **Spatial Subset** via 2D curvilinear mask (bbox + land mask)
 3. **C-Grid → Rho Interpolation**
 4. **Sigma → Pseudo-Depth**
 5. **Output** xarray Dataset with dims ``(time, depth, eta, xi)``
@@ -102,11 +93,11 @@ Open Boundary Conditions (OBC)
 Dispatcher Integration
 ----------------------
 
-NYOFS is **automatically ranked first** for any Initial Conditions or OBC request with a bounding box inside the NYOFS domain. The dispatcher's fallback chain is:
+NYOFS is **automatically ranked first** for any OBC request with a bounding box inside the NYOFS domain. The dispatcher's fallback chain is:
 
 ::
 
-  IC/OBC Fallback Chain:
+  OBC Fallback Chain:
     1. NYOFS       (100m, ~1°² domain)   ← Primary for NY Harbor
     2. NECOFS      (200m, 132°² domain)  ← Regional fallback
     3. HYCOM       (9km, global)         ← Global fallback
@@ -121,20 +112,6 @@ For Throgs Neck Bridge (bbox: [-73.815, 40.785, -73.775, 40.815]):
 
 API Usage
 ---------
-
-Initial Conditions
-~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-  from ecodata_cache.fetchers.nyofs import fetch_nyofs_initial_conditions
-  import pandas as pd
-
-  bbox = [-73.815, 40.785, -73.775, 40.815]  # Throgs Neck
-  target = pd.Timestamp("2026-03-30T12:00:00Z")
-
-  ds = fetch_nyofs_initial_conditions(target.isoformat(), bbox)
-  # ds.u, ds.v, ds.temp, ds.salt, ds.zeta available
 
 Open Boundary Conditions
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -157,12 +134,11 @@ The dispatcher automatically selects NYOFS when appropriate:
 
 .. code-block:: python
 
-  from ecodata_cache.dispatcher import dispatch_ic_request, dispatch_obc_request
+  from ecodata_cache.dispatcher import dispatch_obc_request
 
-  ic_zarr = dispatch_ic_request("2026-03-30", [-73.815, 40.785, -73.775, 40.815])
   obc_zarr = dispatch_obc_request("2026-03-30T12:00:00Z", 24,
                                    [-73.815, 40.785, -73.775, 40.815])
-  # Automatically uses NYOFS, returns Zarr cache paths
+  # Automatically uses NYOFS, returns the Zarr cache path
 
 Testing & Verification
 ----------------------
@@ -176,7 +152,7 @@ Location: ``tests/unit/test_nyofs.py``
 - URL resolution logic (FMRC vs NCEI, naming conventions)
 - NCEI file enumeration across cycles
 - C-grid interpolation with synthetic data
-- IC/OBC fetching (mocked OPeNDAP)
+- OBC fetching (mocked OPeNDAP)
 - Error handling (pydap failures → graceful fallback to None)
 - Dispatcher integration and ranking
 

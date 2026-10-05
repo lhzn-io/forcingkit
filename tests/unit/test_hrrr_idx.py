@@ -1,6 +1,9 @@
 """Unit tests for HRRR .idx parsing and selective byte-range fetching."""
 
-from ecodata_cache.fetchers.hrrr import _parse_idx, WIND_IDX_PATTERNS
+from ecodata_cache.fetchers.hrrr import _parse_idx
+
+# The 10 m wind messages, as a sample of what the HRRR atmosphere fetcher selects.
+WIND_IDX_PATTERNS = ("UGRD:10 m above ground", "VGRD:10 m above ground")
 
 
 # Representative .idx content from a real HRRR wrfsfcf00.grib2.idx

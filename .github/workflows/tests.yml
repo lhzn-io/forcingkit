@@ -28,8 +28,8 @@ jobs:
       - name: Lint
         run: uv run pre-commit run --all-files --show-diff-on-failure
 
-      # Integration tests are excluded: they call live NOAA, ECMWF CDS and HYCOM
-      # endpoints, take roughly 10 minutes, and some need CDS credentials.
+      # Integration tests are excluded: they call live NOAA, NECOFS and HYCOM
+      # endpoints and take several minutes.
       # Run them locally or via workflow_dispatch.
       - name: Unit tests
         run: uv run python -m pytest tests/unit -m "not integration" --durations=10

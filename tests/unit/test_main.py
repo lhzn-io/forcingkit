@@ -1,4 +1,3 @@
-import os
 import pytest
 from httpx import AsyncClient, ASGITransport
 import sys
@@ -16,65 +15,3 @@ async def test_health_check():
         response = await ac.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "healthy", "service": "ecodata-cache"}
-
-
-@pytest.mark.asyncio
-async def test_forcing_generate_endpoint(mocker):
-    # Mock the regridder and dispatcher to avoid triggering real downloads/calculations
-    mocker.patch(
-        "ecodata_serve.main.dispatch_forcing_request",
-        return_value=[
-            os.path.join(os.path.expanduser("~/.cache/ecodata-cache"), "mock_era5.grib")
-        ],
-    )
-    mocker.patch(
-        "ecodata_cache.regridder.process_and_regrid_grib",
-        return_value=os.path.join(
-            os.path.expanduser("~/.cache/ecodata-cache"), "mock_era5.zarr"
-        ),
-    )
-    mocker.patch("os.path.exists", return_value=False)
-
-    payload = {
-        "bbox": {"min_lon": -74.0, "min_lat": 40.0, "max_lon": -73.0, "max_lat": 41.0},
-        "start_time": "2026-03-03T00:00:00Z",
-        "end_time": "2026-03-04T00:00:00Z",
-        "station_id": "",
-    }
-
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as ac:
-        response = await ac.post("/api/v1/bc/generate", json=payload)
-
-    assert response.status_code == 200
-    data = response.json()
-    assert data["status"] == "success"
-    assert data["zarr_file"] == os.path.join(
-        os.path.expanduser("~/.cache/ecodata-cache"), "mock_era5.zarr"
-    )
-    assert data["request"]["start_time"] == "2026-03-03T00:00:00Z"
-
-
-@pytest.mark.asyncio
-async def test_ic_generate_endpoint(mocker):
-    # dispatch_ic_request return value is discarded by the endpoint; the response
-    # always contains the deterministic hash-based zarr_path computed before the call.
-    mocker.patch("ecodata_cache.dispatcher.dispatch_ic_request")
-    mocker.patch("os.path.exists", return_value=False)
-
-    payload = {
-        "bbox": {"min_lon": -74.0, "min_lat": 40.0, "max_lon": -73.0, "max_lat": 41.0},
-        "target_date": "2026-03-03T00:00:00Z",
-    }
-
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as ac:
-        response = await ac.post("/api/v1/ic/generate", json=payload)
-
-    assert response.status_code == 200
-    data = response.json()
-    assert data["status"] == "success"
-    assert data["zarr_id"].startswith("ic_")
-    assert data["zarr_file"].endswith(".zarr")
