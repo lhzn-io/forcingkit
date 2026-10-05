@@ -912,10 +912,16 @@ async def get_dataset_preview_3d(
 
         # Select time slice
         time_name = next((n for n in ["time", "ocean_time", "t"] if n in ds.dims), None)
+        frame_time = None
         if time_name and time_name in u_da.dims:
             t_idx = min(time_idx, u_da.sizes[time_name] - 1)
             u_da = u_da.isel({time_name: t_idx})
             v_da = v_da.isel({time_name: t_idx})
+            # The record's time, for the viewer's label (UTC, to the minute).
+            if time_name in ds.coords and ds[time_name].dtype.kind == "M":
+                frame_time = (
+                    str(ds[time_name].values[t_idx].astype("datetime64[m]")) + "Z"
+                )
 
         # Find the best lon/lat coordinate for each variable.
         # Staggered ROMS grids have per-variable coords (lon_u/lat_u, lon_v/lat_v).
@@ -1103,6 +1109,7 @@ async def get_dataset_preview_3d(
             "bounds": [min(all_lons), min(all_lats), max(all_lons), max(all_lats)],
             "depth_levels": sorted(set(v["depth"] for v in vectors)),
             "count": len(vectors),
+            "time": frame_time,
         }
 
         return Response(

@@ -316,8 +316,10 @@ document.addEventListener("DOMContentLoaded", () => {
         document.querySelectorAll(".dataset-card").forEach(c => c.classList.remove("selected"));
         cardElement.classList.add("selected");
 
+        setPlaying(false);
         selectedDataset = item;
         previewControls.classList.remove("hidden");
+        frameTime.textContent = "";
         timeRange.value = 0;
         timeIdxDisplay.textContent = "0";
 
@@ -434,6 +436,43 @@ document.addEventListener("DOMContentLoaded", () => {
         previewDebounce = setTimeout(updatePreview, 300);
     });
 
+    // Auto-play: step the time slider, waiting for each frame to render, and loop.
+    const playBtn = document.getElementById("playBtn");
+    const frameTime = document.getElementById("frameTime");
+    const FRAME_MS = 400;  // the fastest step; slower frames take as long as they take to load
+    let playing = false;
+
+    function setPlaying(on) {
+        playing = on;
+        if (playBtn) playBtn.textContent = on ? "Pause" : "Play";
+    }
+
+    async function playLoop() {
+        while (playing && selectedDataset) {
+            const last = parseInt(timeRange.max) || 0;
+            if (last < 1) break;
+            const next = (parseInt(timeRange.value) + 1) % (last + 1);
+            const started = performance.now();
+            timeRange.value = next;
+            if (window.currentDataCube && window.currentDataCube[next]) {
+                timeRange.dispatchEvent(new Event("input"));
+            } else {
+                timeIdxDisplay.textContent = `${next} (${selectedDataset.time_steps || '?'})`;
+                await updatePreview();
+            }
+            await new Promise(r => setTimeout(r, Math.max(0, FRAME_MS - (performance.now() - started))));
+        }
+        setPlaying(false);
+    }
+
+    if (playBtn) {
+        playBtn.addEventListener("click", () => {
+            if (playing) { setPlaying(false); return; }
+            setPlaying(true);
+            playLoop();
+        });
+    }
+
     const lodSelect = document.getElementById("lodSelect");
     if (lodSelect) {
         lodSelect.addEventListener("change", () => {
@@ -467,6 +506,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             try {
                 const info = await window.preview3d.load(id, parseInt(t));
+                frameTime.textContent = info.time ? info.time.replace("T", " ").replace("Z", " UTC") : "";
                 console.log(`3D preview: ${info.count} vectors (${info.u_var}/${info.v_var}), ${info.depths} depth levels`);
             } catch (err) {
                 console.error("3D preview failed:", err);

@@ -8,6 +8,11 @@ let camera = null;
 let controls = null;
 let arrowGroup = null;
 let animId = null;
+let legendHost = null;
+// The dataset on screen and the largest speed seen in it, so stepping through time keeps the
+// camera where the user put it and colours that compare across frames.
+let currentDatasetId = null;
+let scaleMax = 0;
 
 // - Depth exaggeration (matches hydro viewer: 10x base * slider) -
 const DEPTH_EXAG = 8.0;  // equivalent to hydro viewer slider default
@@ -46,6 +51,55 @@ function depthColor(mag, maxMag, depthFrac) {
 }
 
 // - Merge simple geometries -
+// - Color map for single-level fields (atmosphere, or a surface-only ocean field): speed -
+// Plasma stops (matplotlib), perceptually uniform and legible on the dark background.
+const PLASMA = [
+    [0.00, [0.050, 0.031, 0.529]],
+    [0.25, [0.494, 0.012, 0.659]],
+    [0.50, [0.800, 0.278, 0.471]],
+    [0.75, [0.973, 0.584, 0.251]],
+    [1.00, [0.941, 0.976, 0.129]],
+];
+
+function speedColor(mag, maxMag) {
+    const t = Math.min(1, mag / Math.max(maxMag, 0.001));
+    for (let i = 1; i < PLASMA.length; i++) {
+        const [t1, c1] = PLASMA[i];
+        if (t <= t1) {
+            const [t0, c0] = PLASMA[i - 1];
+            const s = (t - t0) / (t1 - t0);
+            return new THREE.Color(
+                c0[0] + (c1[0] - c0[0]) * s,
+                c0[1] + (c1[1] - c0[1]) * s,
+                c0[2] + (c1[2] - c0[2]) * s,
+            );
+        }
+    }
+    return new THREE.Color(...PLASMA[PLASMA.length - 1][1]);
+}
+
+// A speed legend over the 3D canvas: the plasma ramp from 0 to the frame's maximum speed.
+function showSpeedLegend(maxMag) {
+    hideSpeedLegend();
+    if (!legendHost) return;
+    if (getComputedStyle(legendHost).position === 'static') legendHost.style.position = 'relative';
+    const stops = PLASMA.map(([s, c]) =>
+        `rgb(${c.map(x => Math.round(x * 255)).join(',')}) ${s * 100}%`).join(', ');
+    const el = document.createElement('div');
+    el.id = 'preview3dLegend';
+    el.style.cssText = 'position:absolute;right:16px;bottom:16px;padding:8px 10px;border-radius:6px;' +
+        'background:rgba(13,17,23,0.75);color:#c9d1d9;font:12px system-ui,sans-serif;pointer-events:none;';
+    el.innerHTML = `<div style="margin-bottom:4px">Speed (m/s)</div>` +
+        `<div style="width:160px;height:10px;border-radius:2px;background:linear-gradient(to right, ${stops})"></div>` +
+        `<div style="display:flex;justify-content:space-between;margin-top:2px"><span>0</span><span>${maxMag.toFixed(1)}</span></div>`;
+    legendHost.appendChild(el);
+}
+
+function hideSpeedLegend() {
+    const el = document.getElementById('preview3dLegend');
+    if (el) el.remove();
+}
+
 function mergeGeos(geos) {
     let totalV = 0, allIdx = [];
     for (const g of geos) { totalV += g.attributes.position.count; }
@@ -69,6 +123,7 @@ function mergeGeos(geos) {
 }
 
 function initThree(container) {
+    legendHost = container;
     const canvas = document.createElement('canvas');
     canvas.id = 'preview3dCanvas';
     container.appendChild(canvas);
@@ -120,6 +175,7 @@ function initThree(container) {
 }
 
 function clearArrows() {
+    hideSpeedLegend();
     if (arrowGroup) {
         scene.remove(arrowGroup);
         arrowGroup.traverse(c => { if (c.geometry) c.geometry.dispose(); if (c.material) c.material.dispose(); });
@@ -127,7 +183,7 @@ function clearArrows() {
     }
 }
 
-function buildVectorField(data) {
+function buildVectorField(data, fitCamera) {
     clearArrows();
     if (!data.vectors || data.vectors.length === 0) return;
 
@@ -151,6 +207,8 @@ function buildVectorField(data) {
         const mag = Math.sqrt(v.u * v.u + v.v * v.v);
         if (mag > maxMag) maxMag = mag;
     }
+    scaleMax = Math.max(scaleMax, maxMag);
+    maxMag = scaleMax;
 
     // Build arrow geometry (shaft + cone)
     const shaft = new THREE.CylinderGeometry(0.12, 0.12, 1, 6);
@@ -162,8 +220,13 @@ function buildVectorField(data) {
     const arrowGeo = mergeGeos([shaft, cone]);
 
     const count = data.vectors.length;
+    // One level (an atmosphere, or a surface-only ocean field): colour by speed, not depth.
+    const singleLevel = !data.depth_levels || data.depth_levels.length <= 1;
     // depthTest: false so subsurface arrows render through the grid plane
-    const mat = new THREE.MeshPhongMaterial({ flatShading: true, depthTest: false });
+    // Unlit for a single level, so the speed colour map shows true; shaded for depth layers.
+    const mat = singleLevel
+        ? new THREE.MeshBasicMaterial({ depthTest: false })
+        : new THREE.MeshPhongMaterial({ flatShading: true, depthTest: false });
     const mesh = new THREE.InstancedMesh(arrowGeo, mat, count);
     mesh.renderOrder = 10;
 
@@ -187,7 +250,7 @@ function buildVectorField(data) {
         dummy.scale.set(arrowLen, arrowLen, arrowLen);
         dummy.updateMatrix();
         mesh.setMatrixAt(i, dummy.matrix);
-        mesh.setColorAt(i, depthColor(mag, maxMag, v.depth_frac || 0));
+        mesh.setColorAt(i, singleLevel ? speedColor(mag, maxMag) : depthColor(mag, maxMag, v.depth_frac || 0));
     }
 
     mesh.instanceMatrix.needsUpdate = true;
@@ -211,8 +274,10 @@ function buildVectorField(data) {
     }
 
     scene.add(arrowGroup);
+    if (singleLevel) showSpeedLegend(maxMag);
 
-    // Fit camera to vector field bounds
+    // Fit camera to vector field bounds, only for a newly selected dataset
+    if (!fitCamera) return;
     const box = new THREE.Box3().setFromObject(arrowGroup);
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
@@ -242,6 +307,7 @@ window.preview3d = {
         const canvas = document.getElementById('preview3dCanvas');
         if (canvas) canvas.style.display = 'none';
         this.active = false;
+        currentDatasetId = null;
         clearArrows();
     },
 
@@ -254,8 +320,10 @@ window.preview3d = {
                 throw new Error(err.detail || `HTTP ${res.status}`);
             }
             const data = await res.json();
-            buildVectorField(data);
-            return { count: data.count, u_var: data.u_var, v_var: data.v_var, depths: data.depth_levels.length };
+            const newDataset = datasetId !== currentDatasetId;
+            if (newDataset) { currentDatasetId = datasetId; scaleMax = 0; }
+            buildVectorField(data, newDataset);
+            return { count: data.count, u_var: data.u_var, v_var: data.v_var, depths: data.depth_levels.length, time: data.time };
         } catch (e) {
             console.error('3D preview failed:', e);
             throw e;

@@ -101,8 +101,11 @@
                             </div>
                         </div>
                         <div id="timeSliderGroup" class="control-group">
-                            <label for="timeRange">Time Index (<span id="timeIdxDisplay">0</span>)</label>
-                            <input type="range" id="timeRange" min="0" max="48" value="0" class="form-range">
+                            <label for="timeRange">Time Index (<span id="timeIdxDisplay">0</span>) <span id="frameTime" style="color:#8b949e;"></span></label>
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <button id="playBtn" type="button" class="btn" title="Step through the time steps and loop">Play</button>
+                                <input type="range" id="timeRange" min="0" max="48" value="0" class="form-range" style="flex:1;">
+                            </div>
                         </div>
                         <div id="snapshotLabel" class="control-group" style="display:none;">
                             <span style="color:#8b949e; font-size:0.85rem; font-style:italic;" id="snapshotLabelText"></span>
