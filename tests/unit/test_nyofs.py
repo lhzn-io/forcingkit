@@ -6,7 +6,7 @@ import pandas as pd
 import xarray as xr
 from unittest.mock import patch
 
-from ecodata_cache.fetchers import nyofs
+from forcingkit.fetchers import nyofs
 
 
 class TestNYOFSMetadata:
@@ -195,7 +195,7 @@ class TestResolveVar:
 class TestOpenNYOFSDataset:
     """Test _open_nyofs_dataset handles real-world FMRC quirks."""
 
-    @patch("ecodata_cache.fetchers.nyofs.xr.open_dataset")
+    @patch("forcingkit.fetchers.nyofs.xr.open_dataset")
     def test_fmrc_non_monotonic_time_index(self, mock_xr_open):
         """FMRC dataset with non-monotonic time should still slice correctly."""
         # Simulate a shuffled FMRC time axis (observed in production)
@@ -220,7 +220,7 @@ class TestOpenNYOFSDataset:
 class TestBoundaryConditions:
     """Test OBC fetcher logic (mocked OPeNDAP)."""
 
-    @patch("ecodata_cache.fetchers.nyofs._open_nyofs_dataset")
+    @patch("forcingkit.fetchers.nyofs._open_nyofs_dataset")
     def test_fetch_nyofs_obc_success(self, mock_open):
         """Test successful OBC fetch with mocked pydap."""
         # Create mock time-series dataset
@@ -263,7 +263,7 @@ class TestBoundaryConditions:
 
         assert result is None
 
-    @patch("ecodata_cache.fetchers.nyofs.xr.open_dataset")
+    @patch("forcingkit.fetchers.nyofs.xr.open_dataset")
     def test_fetch_nyofs_obc_pydap_error(self, mock_xr_open):
         """Test OBC fetch gracefully handles pydap errors."""
         mock_xr_open.side_effect = Exception("OPeNDAP connection failed")
@@ -282,7 +282,7 @@ class TestDispatcherIntegration:
 
     def test_nyofs_in_obc_fetchers(self):
         """Test that NYOFS is registered in OBC fetchers."""
-        from ecodata_cache.dispatcher import get_obc_fetchers
+        from forcingkit.dispatcher import get_obc_fetchers
 
         obc_fetchers = get_obc_fetchers()
         fetcher_ids = [m.get_metadata()["id"] for m, _ in obc_fetchers]

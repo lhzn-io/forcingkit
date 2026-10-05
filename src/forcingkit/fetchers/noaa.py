@@ -3,6 +3,7 @@ import logging
 import requests
 import json
 from datetime import datetime
+from forcingkit import settings
 
 logger = logging.getLogger(__name__)
 
@@ -12,10 +13,7 @@ def fetch_noaa_tide_data(
     start_time: str,
     end_time: str,
     cache_dir: str = os.path.join(
-        os.environ.get(
-            "ECODATA_CACHE_CACHE_DIR",
-            os.path.expanduser("~/.cache/ecodata-cache"),
-        ),
+        settings.cache_dir(),
         "noaa",
     ),
     cache_bust: bool = False,

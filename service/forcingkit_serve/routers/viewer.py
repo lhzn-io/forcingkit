@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from typing import List
 import io
 import logging
+from forcingkit import settings
 
 logger = logging.getLogger(__name__)
 
@@ -227,11 +228,7 @@ def _enrich_zarr_metadata(zarr_path: Path) -> dict:
 async def get_cache_inventory(response: FastAPIResponse):
     """Crawls the local data cache and returns an inventory of all processed forcing datasets."""
     response.headers["Cache-Control"] = "no-store"
-    cache_dir = Path(
-        Path(
-            os.environ.get("ECODATA_CACHE_CACHE_DIR", "~/.cache/ecodata-cache")
-        ).expanduser()
-    )
+    cache_dir = Path(Path(settings.cache_dir()).expanduser())
     if not cache_dir.exists():
         return []
 
@@ -457,9 +454,7 @@ async def delete_dataset(dataset_id: str):
     """Deletes a single dataset from the cache by ID."""
     import shutil
 
-    cache_dir = Path(
-        os.environ.get("ECODATA_CACHE_CACHE_DIR", "~/.cache/ecodata-cache")
-    ).expanduser()
+    cache_dir = Path(settings.cache_dir()).expanduser()
 
     # Use rglob to find the dataset ID anywhere in the cache
     matches = list(cache_dir.rglob(f"{dataset_id}.zarr"))
@@ -513,9 +508,7 @@ async def get_dataset_preview(
     import matplotlib.pyplot as plt
     import numpy as np
 
-    cache_dir = Path(
-        os.environ.get("ECODATA_CACHE_CACHE_DIR", "~/.cache/ecodata-cache")
-    ).expanduser()
+    cache_dir = Path(settings.cache_dir()).expanduser()
     full_path = ""
 
     if ext == "zarr":
@@ -881,9 +874,7 @@ async def get_dataset_preview_3d(
     import numpy as np
     import json
 
-    cache_dir = Path(
-        os.environ.get("ECODATA_CACHE_CACHE_DIR", "~/.cache/ecodata-cache")
-    ).expanduser()
+    cache_dir = Path(settings.cache_dir()).expanduser()
     full_path = os.path.join(cache_dir, f"{dataset_id}.zarr")
 
     if not os.path.exists(full_path):
@@ -1143,9 +1134,7 @@ async def get_point_value(
     import xarray as xr
     import numpy as np
 
-    cache_dir = Path(
-        os.environ.get("ECODATA_CACHE_CACHE_DIR", "~/.cache/ecodata-cache")
-    ).expanduser()
+    cache_dir = Path(settings.cache_dir()).expanduser()
     full_path = os.path.join(
         cache_dir, f"{dataset_id}.zarr" if ext == "zarr" else f"{dataset_id}.{ext}"
     )

@@ -3,7 +3,7 @@ import uvicorn
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run Ecodata Cache Ingestor")
+    parser = argparse.ArgumentParser(description="Run the forcingkit service")
     parser.add_argument("--host", default="0.0.0.0", help="Bind host")
     parser.add_argument("--port", type=int, default=9598, help="Bind port")
     parser.add_argument(
@@ -18,14 +18,14 @@ def main() -> None:
     if args.reload:
         print(f"Reload enabled: Forcing workers=1 on port {args.port}")
         uvicorn.run(
-            "ecodata_serve.main:app", host=args.host, port=args.port, reload=True
+            "forcingkit_serve.main:app", host=args.host, port=args.port, reload=True
         )
     else:
         print(
             f"Starting Data Ingestor Service on {args.host}:{args.port} with {args.workers} workers."
         )
         uvicorn.run(
-            "ecodata_serve.main:app",
+            "forcingkit_serve.main:app",
             host=args.host,
             port=args.port,
             workers=args.workers,

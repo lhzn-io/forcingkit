@@ -30,7 +30,7 @@ Summary
      - 1 h (15 min for some fields)
      - CONUS; archive on AWS from 2014-07-30
      - About an hour after each cycle
-     - **ecodata-cache** ``/api/v1/atmosphere`` (schema ``hrrr-atm-v1``); default for CoastalSim
+     - **forcingkit** ``/api/v1/atmosphere`` (schema ``hrrr-atm-v1``); default for CoastalSim
    * - **ERA5** (ECMWF, Copernicus C3S)
      - Global reanalysis (4D-Var)
      - 0.25 degrees (about 31 km)

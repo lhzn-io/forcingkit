@@ -7,8 +7,8 @@ import pytest
 import xarray as xr
 from pyproj import Proj
 
-from ecodata_cache.dispatcher import atmosphere_key
-from ecodata_cache.fetchers import hrrr_atmosphere as ha
+from forcingkit.dispatcher import atmosphere_key
+from forcingkit.fetchers import hrrr_atmosphere as ha
 
 CONE = float(np.sin(np.deg2rad(38.5)))
 LOV = 262.5

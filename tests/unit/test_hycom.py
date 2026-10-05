@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from unittest.mock import patch
 
-from ecodata_cache.fetchers.hycom import fetch_hycom_boundary_conditions
+from forcingkit.fetchers.hycom import fetch_hycom_boundary_conditions
 
 
 def test_hycom_historical_stitch():
@@ -13,7 +13,7 @@ def test_hycom_historical_stitch():
     start_date = "2018-12-03"
     duration = 48  # 2 days
 
-    with patch("ecodata_cache.fetchers.hycom._fetch_hycom_data") as mock_fetch:
+    with patch("forcingkit.fetchers.hycom._fetch_hycom_data") as mock_fetch:
         # Return dummy datasets
         ds1 = xr.Dataset(
             {"u": (("time", "lat", "lon"), np.ones((24, 5, 5)))},

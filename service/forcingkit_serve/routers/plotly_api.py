@@ -5,6 +5,7 @@ import logging
 import json
 import numpy as np
 import xarray as xr
+from forcingkit import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Cache View Data"])
@@ -18,9 +19,7 @@ async def get_dataset_data(
     time_idx: str = Query("0", description="Time step index OR 'all'"),
     lod: int = Query(0, description="Level of Detail stride (0=auto)"),
 ):
-    cache_dir = Path(
-        os.environ.get("ECODATA_CACHE_CACHE_DIR", "~/.cache/ecodata-cache")
-    ).expanduser()
+    cache_dir = Path(settings.cache_dir()).expanduser()
     full_path = os.path.join(
         cache_dir, f"{dataset_id}.zarr" if ext == "zarr" else f"{dataset_id}.{ext}"
     )

@@ -2,6 +2,7 @@ import os
 import logging
 from typing import Optional
 import numpy as np
+from forcingkit import settings
 
 
 logger = logging.getLogger(__name__)
@@ -17,10 +18,7 @@ def dispatch_station_profiles_request(
     start_time: str,
     end_time: str,
     cache_dir: str = os.path.join(
-        os.environ.get(
-            "ECODATA_CACHE_CACHE_DIR",
-            os.path.expanduser("~/.cache/ecodata-cache"),
-        ),
+        settings.cache_dir(),
         "erddap",
     ),
     cache_bust: bool = False,
@@ -34,7 +32,7 @@ def dispatch_station_profiles_request(
     )
 
     # We could implement a real fallback strategy here, but for now we dispatch straight to our ERDDAP module
-    from ecodata_cache.fetchers.erddap import fetch_erddap_station_profiles
+    from forcingkit.fetchers.erddap import fetch_erddap_station_profiles
 
     try:
         profiles = fetch_erddap_station_profiles(
@@ -55,10 +53,7 @@ def dispatch_bounding_box_profiles_request(
     start_time: str,
     end_time: str,
     cache_dir: str = os.path.join(
-        os.environ.get(
-            "ECODATA_CACHE_CACHE_DIR",
-            os.path.expanduser("~/.cache/ecodata-cache"),
-        ),
+        settings.cache_dir(),
         "erddap",
     ),
     cache_bust: bool = False,
@@ -70,7 +65,7 @@ def dispatch_bounding_box_profiles_request(
         f"Dispatching bounded profile request for {bbox} ({start_time} to {end_time})"
     )
 
-    from ecodata_cache.fetchers.erddap import fetch_erddap_stations_in_bbox
+    from forcingkit.fetchers.erddap import fetch_erddap_stations_in_bbox
 
     try:
         profiles = fetch_erddap_stations_in_bbox(
@@ -120,9 +115,7 @@ def dispatch_obc_request(
     start_date: str,
     duration_hours: int,
     bbox: list[float],
-    cache_dir: str = os.environ.get(
-        "ECODATA_CACHE_CACHE_DIR", os.path.expanduser("~/.cache/ecodata-cache")
-    ),
+    cache_dir: str = settings.cache_dir(),
     cache_bust: bool = False,
     zarr_path: Optional[str] = None,
     allow_donor_fallback: bool = True,
@@ -132,7 +125,7 @@ def dispatch_obc_request(
     pad_cells: int = 3,
     vertical_spacing_m: float = 2.0,
 ) -> str:
-    from ecodata_cache.fetchers.necofs import OBC_SCHEMA
+    from forcingkit.fetchers.necofs import OBC_SCHEMA
 
     os.makedirs(cache_dir, exist_ok=True)
     obc_cache_dir = os.path.join(cache_dir, "obc")
@@ -172,7 +165,7 @@ def dispatch_obc_request(
             except Exception:
                 pass
 
-    from ecodata_cache.zarr_stream import store_is_complete
+    from forcingkit.zarr_stream import store_is_complete
 
     if not cache_bust and store_is_complete(zarr_path, (OBC_SCHEMA,)):
         logger.info(f"Cache hit for OBC: {zarr_path}")
@@ -311,7 +304,7 @@ def atmosphere_key(
     """Cache id of an atmosphere delivery; the schema is part of it."""
     import hashlib
 
-    from ecodata_cache.fetchers.hrrr_atmosphere import HRRR_ATM_SCHEMA
+    from forcingkit.fetchers.hrrr_atmosphere import HRRR_ATM_SCHEMA
 
     key = (
         f"atm_{source}_{HRRR_ATM_SCHEMA}_{bbox[0]}_{bbox[1]}_{bbox[2]}_{bbox[3]}_"
@@ -330,8 +323,8 @@ def dispatch_atmosphere_request(
     cache_bust: bool = False,
 ) -> str:
     """HRRR prescribed atmosphere for `hours` from `start_time`, streamed to `zarr_path`."""
-    from ecodata_cache.fetchers import hrrr_atmosphere
-    from ecodata_cache.zarr_stream import StreamingZarrWriter, store_is_complete
+    from forcingkit.fetchers import hrrr_atmosphere
+    from forcingkit.zarr_stream import StreamingZarrWriter, store_is_complete
 
     if not cache_bust and store_is_complete(
         zarr_path, (hrrr_atmosphere.HRRR_ATM_SCHEMA,)
@@ -386,7 +379,7 @@ def _stream_parent(
     sponge_cells: int,
 ) -> str:
     """Write a donor's `iter_parent` records to `zarr_path` one hour at a time."""
-    from ecodata_cache.zarr_stream import StreamingZarrWriter
+    from forcingkit.zarr_stream import StreamingZarrWriter
 
     writer = None
     try:
@@ -438,7 +431,7 @@ def _supported_kwargs(func, **kwargs) -> dict:
 
 
 def get_obc_fetchers():
-    from ecodata_cache.fetchers import (
+    from forcingkit.fetchers import (
         dbofs,
         hycom,
         necofs,

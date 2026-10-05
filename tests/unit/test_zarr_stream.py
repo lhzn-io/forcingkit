@@ -9,8 +9,8 @@ import pytest
 import xarray as xr
 import zarr
 
-from ecodata_cache.dispatcher import _stream_parent
-from ecodata_cache.zarr_stream import (
+from forcingkit.dispatcher import _stream_parent
+from forcingkit.zarr_stream import (
     PARTIAL_SUFFIX,
     StreamingZarrWriter,
     store_is_complete,

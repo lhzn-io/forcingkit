@@ -1,7 +1,7 @@
 import pytest
 import datetime
-from ecodata_cache.fetchers.dbofs import fetch_dbofs_boundary_conditions
-from ecodata_cache.fetchers.nyofs import fetch_nyofs_boundary_conditions
+from forcingkit.fetchers.dbofs import fetch_dbofs_boundary_conditions
+from forcingkit.fetchers.nyofs import fetch_nyofs_boundary_conditions
 
 
 @pytest.mark.integration

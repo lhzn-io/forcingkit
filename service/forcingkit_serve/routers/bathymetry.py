@@ -7,6 +7,7 @@ from fastapi import APIRouter, Query, HTTPException
 from fastapi.responses import StreamingResponse, FileResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
+from forcingkit import settings
 
 router = APIRouter(prefix="/api/v1/bathymetry", tags=["bathymetry"])
 logger = logging.getLogger(__name__)
@@ -53,7 +54,7 @@ async def fuse_bathymetry(
     """
     Smart proxy for TopoBathySim that retrieves fused topography.
     If TopoBathySim is on a remote cluster, this caches the zipped output locally
-    in ecodata-cache so future identical runs bypass the network.
+    in forcingkit so future identical runs bypass the network.
     """
     topobathy_url = os.environ.get("TOPOBATHYSIM_URL", "http://localhost:9595").rstrip(
         "/"
@@ -87,12 +88,7 @@ async def fuse_bathymetry(
     logger.info(
         f"TopoBathySim is remote ({topobathy_url}). Entering proxy-cache routine."
     )
-    cache_dir = (
-        Path(
-            os.environ.get("ECODATA_CACHE_CACHE_DIR", "~/.cache/ecodata-cache")
-        ).expanduser()
-        / "bathymetry"
-    )
+    cache_dir = Path(settings.cache_dir()).expanduser() / "bathymetry"
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # Predictable cache key
@@ -197,12 +193,7 @@ async def fuse_bathymetry_post(request: FusionRequest):
     logger.info(
         f"TopoBathySim is remote ({topobathy_url}). Entering proxy-cache routine."
     )
-    cache_dir = (
-        Path(
-            os.environ.get("ECODATA_CACHE_CACHE_DIR", "~/.cache/ecodata-cache")
-        ).expanduser()
-        / "bathymetry"
-    )
+    cache_dir = Path(settings.cache_dir()).expanduser() / "bathymetry"
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # Include policy in cache key

@@ -1,6 +1,7 @@
 services:
-  data-ingestor:
+  forcingkit:
     build: .
+    image: forcingkit
     ports:
       - "9598:9598"
     volumes:

@@ -6,7 +6,7 @@ import pandas as pd
 import xarray as xr
 from unittest.mock import patch
 
-from ecodata_cache.fetchers import dbofs
+from forcingkit.fetchers import dbofs
 
 
 class TestDBOFSMetadata:
@@ -192,7 +192,7 @@ class TestResolveVar:
 class TestBoundaryConditions:
     """Test OBC fetcher logic (mocked OPeNDAP)."""
 
-    @patch("ecodata_cache.fetchers.dbofs._open_dbofs_dataset")
+    @patch("forcingkit.fetchers.dbofs._open_dbofs_dataset")
     def test_fetch_dbofs_obc_success(self, mock_open):
         """Successful OBC fetch returns dataset with correct dims."""
         nt, nk, neta, nxi = 6, 10, 20, 25
@@ -240,7 +240,7 @@ class TestBoundaryConditions:
         )
         assert result is None
 
-    @patch("ecodata_cache.fetchers.dbofs._open_dbofs_dataset")
+    @patch("forcingkit.fetchers.dbofs._open_dbofs_dataset")
     def test_fetch_dbofs_obc_pydap_error(self, mock_open):
         """OBC fetch returns None when dataset open fails."""
         mock_open.return_value = None
@@ -257,14 +257,14 @@ class TestDispatcherRegistration:
 
     def test_dbofs_in_obc_fetchers(self):
         """DBOFS must appear in OBC fetchers."""
-        from ecodata_cache.dispatcher import get_obc_fetchers
+        from forcingkit.dispatcher import get_obc_fetchers
 
         ids = [m.get_metadata()["id"] for m, _ in get_obc_fetchers()]
         assert "dbofs" in ids
 
     def test_dbofs_ranks_above_necofs_for_obc_delaware_bay(self):
         """DBOFS must outrank NECOFS for OBC on the delaware bay bbox."""
-        from ecodata_cache.dispatcher import _rank_obc_candidates
+        from forcingkit.dispatcher import _rank_obc_candidates
 
         bbox = [-75.5, 38.5, -74.5, 39.5]
         ranked = _rank_obc_candidates(bbox)

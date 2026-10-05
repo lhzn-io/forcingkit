@@ -1,4 +1,4 @@
-# Ecodata Cache Reference
+# forcingkit Reference
 
 ## Mission
 
@@ -9,7 +9,7 @@ engine.
 ## Environment
 
 - **Python 3.11+** via `uv`. Always use `uv run` — never `pip install`.
-- **FastAPI** microservice in `service/ecodata_serve/`.
+- **FastAPI** microservice in `service/forcingkit_serve/`.
 - Tests run with `uv run pytest`.
 
 ## Architecture
@@ -17,18 +17,18 @@ engine.
 ### Core Pipeline
 
 ```text
-HTTP Request → service/ecodata_serve/main.py
-             → src/ecodata_cache/dispatcher.py
+HTTP Request → service/forcingkit_serve/main.py
+             → src/forcingkit/dispatcher.py
              → fetchers/*.py
-             → Zarr (~/.cache/ecodata-cache/)
+             → Zarr (~/.cache/forcingkit/)
 ```
 
-- **Entry point**: `service/ecodata_serve/main.py` — FastAPI application.
-- **Dispatcher**: `src/ecodata_cache/dispatcher.py` — interprets
+- **Entry point**: `service/forcingkit_serve/main.py` — FastAPI application.
+- **Dispatcher**: `src/forcingkit/dispatcher.py` — interprets
   requests and routes to the appropriate fetcher via tiered fallback.
   Uses `_rank_obc_candidates(bbox)` to select the best parent by
   resolution and domain overlap.
-- **Fetchers**: `src/ecodata_cache/fetchers/` — isolated modules per data source.
+- **Fetchers**: `src/forcingkit/fetchers/` — isolated modules per data source.
 
 ## Fetcher Tier (Parent Ocean Priority Order)
 
@@ -69,7 +69,7 @@ uv sync
 uv run python service/run_server.py
 
 # Run one-off fetch
-uv run python -c "from ecodata_cache.fetchers import nyofs; print(nyofs.get_metadata())"
+uv run python -c "from forcingkit.fetchers import nyofs; print(nyofs.get_metadata())"
 ```
 
 ## Gotchas
@@ -95,4 +95,4 @@ uv run python -c "from ecodata_cache.fetchers import nyofs; print(nyofs.get_meta
 - **Cache keys**: Cache Zarr keys are deterministic hashes of bbox
   - time window. Changing fetcher output schema (variable names, dims)
   will miss existing cache entries — purge
-  `~/.cache/ecodata-cache/` when making breaking schema changes.
+  `~/.cache/forcingkit/` when making breaking schema changes.

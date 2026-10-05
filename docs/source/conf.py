@@ -6,7 +6,7 @@
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
-project = "Coastal Sim Data"
+project = "forcingkit"
 copyright = "2026, lhzn.io"
 author = "lhzn.io"
 

@@ -8,8 +8,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ecodata_cache.dispatcher import _supported_kwargs
-from ecodata_cache.fetchers.necofs import (
+from forcingkit.dispatcher import _supported_kwargs
+from forcingkit.fetchers.necofs import (
     OBC_SCHEMA,
     necofs_archive_file_date,
     sigma_to_z,
@@ -122,7 +122,7 @@ def test_barycentric_weights_match_linear_nd_interpolation():
     from scipy.interpolate import LinearNDInterpolator
     from scipy.spatial import Delaunay
 
-    from ecodata_cache.fetchers.necofs import Barycentric
+    from forcingkit.fetchers.necofs import Barycentric
 
     rng = np.random.default_rng(0)
     pts = rng.uniform(0.0, 1.0, (200, 2))

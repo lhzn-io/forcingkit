@@ -35,7 +35,7 @@ Spatial Domain & Resolution
 Data Access Strategy
 --------------------
 
-ecodata-cache uses a **tiered URL resolution** approach:
+forcingkit uses a **tiered URL resolution** approach:
 
 1. **Recent Data (< 31 days)**: CO-OPS THREDDS FMRC Aggregation
    - Single virtual OPeNDAP dataset consolidating rolling 7-day window
@@ -76,7 +76,7 @@ Surface Elevation        ``zeta``       Units: m
 Bathymetric Depth        ``depth``      At rho-points (cell centers)
 ======================== ============== ==================================
 
-**Important**: u and v are on **staggered C-grid** edges and must be interpolated to rho-points (cell centers) before use in coastal-sim. ecodata-cache handles this automatically.
+**Important**: u and v are on **staggered C-grid** edges and must be interpolated to rho-points (cell centers) before use in coastal-sim. forcingkit handles this automatically.
 
 Processing Pipeline
 -------------------
@@ -118,7 +118,7 @@ Open Boundary Conditions
 
 .. code-block:: python
 
-  from ecodata_cache.fetchers.nyofs import fetch_nyofs_boundary_conditions
+  from forcingkit.fetchers.nyofs import fetch_nyofs_boundary_conditions
 
   bbox = [-73.815, 40.785, -73.775, 40.815]
   start = pd.Timestamp("2026-03-30T12:00:00Z")
@@ -134,7 +134,7 @@ The dispatcher automatically selects NYOFS when appropriate:
 
 .. code-block:: python
 
-  from ecodata_cache.dispatcher import dispatch_obc_request
+  from forcingkit.dispatcher import dispatch_obc_request
 
   obc_zarr = dispatch_obc_request("2026-03-30T12:00:00Z", 24,
                                    [-73.815, 40.785, -73.775, 40.815])

@@ -5,8 +5,8 @@ import pytest
 from httpx import AsyncClient, ASGITransport
 
 sys.path.insert(0, "service")
-from ecodata_serve.main import app  # noqa: E402
-from ecodata_serve.routers.removed import REMOVED_ROUTES  # noqa: E402
+from forcingkit_serve.main import app  # noqa: E402
+from forcingkit_serve.routers.removed import REMOVED_ROUTES  # noqa: E402
 
 
 @pytest.mark.asyncio

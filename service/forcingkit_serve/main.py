@@ -15,12 +15,12 @@ from fastapi.responses import FileResponse, RedirectResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
-from ecodata_cache.dispatcher import (  # noqa: E402
+from forcingkit.dispatcher import (  # noqa: E402
     dispatch_station_profiles_request,
     dispatch_bounding_box_profiles_request,
 )
-from ecodata_serve.routers import viewer, bathymetry, plotly_api, removed  # noqa: E402
-from ecodata_cache.fetchers.noaa import fetch_noaa_tide_data  # noqa: E402
+from forcingkit_serve.routers import viewer, bathymetry, plotly_api, removed  # noqa: E402
+from forcingkit.fetchers.noaa import fetch_noaa_tide_data  # noqa: E402
 
 # Configure Logging
 log_dir = Path("logs")
@@ -56,15 +56,16 @@ if not has_console:
     stream_handler.setLevel(log_level)
     root_logger.addHandler(stream_handler)
 
-logging.getLogger("ecodata_serve").setLevel(log_level)
-logger = logging.getLogger("ecodata_serve")
+logging.getLogger("forcingkit_serve").setLevel(log_level)
+logger = logging.getLogger("forcingkit_serve")
 
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from forcingkit import settings  # noqa: E402
 
 # Initialize FastAPI application
 app = FastAPI(
-    title="ecodata-cache",
-    description="Microservice for fetching, parsing, and regridding multi-domain environmental data.",
+    title="forcingkit",
+    description="Spatiotemporal forcing for computational Earth-system models: selects, regrids and serves model-ready time series with provenance.",
     version="1.0.0",
     openapi_tags=[
         {
@@ -162,7 +163,7 @@ class HoTRequest(BaseModel):
 async def hot_discovery(req: HoTRequest):
     """Discover head of tide limits using OSM API."""
 
-    from ecodata_cache.fetchers.hydrography import find_head_of_tide
+    from forcingkit.fetchers.hydrography import find_head_of_tide
 
     try:
         results = find_head_of_tide(req.lat, req.lon, req.radius_km)
@@ -176,15 +177,13 @@ async def hot_discovery(req: HoTRequest):
 @app.get("/health")
 async def health_check() -> Dict[str, str]:
     """Basic health check endpoint."""
-    return {"status": "healthy", "service": "ecodata-cache"}
+    return {"status": "healthy", "service": "forcingkit"}
 
 
 @app.api_route("/api/v1/cache/purge", methods=["GET", "POST"])
 async def purge_cache() -> Dict[str, str]:
     """Purges the forcing and IC data cache. Supports both GET (manual) and POST (UI)."""
-    cache_dir = Path(
-        os.environ.get("COASTAL_SIM_DATA_CACHE_DIR", "~/.cache/ecodata-cache")
-    ).expanduser()
+    cache_dir = Path(settings.cache_dir()).expanduser()
     if os.path.exists(cache_dir):
         logger.info(f"Purging cache directory: {cache_dir}")
         try:
@@ -270,7 +269,7 @@ def _obc_hash_source(request: "OBCRequest", bbox_list: list, donor_id: str) -> s
     """The string an OBC store id is hashed from. Shared by /obc/cache and /obc so the two can
     never disagree; it includes the store schema, so a store built under an older schema is never
     served for a newer request."""
-    from ecodata_cache.fetchers.necofs import OBC_SCHEMA
+    from forcingkit.fetchers.necofs import OBC_SCHEMA
 
     return (
         f"{bbox_list}_{request.start_date}_{request.duration_hours}_{donor_id}_"
@@ -298,7 +297,7 @@ def _zip_is_stale(zip_path: str, store_path: str) -> bool:
 async def cache_obc(request: OBCRequest) -> Dict[str, Any]:
     import hashlib
 
-    from ecodata_cache.dispatcher import predict_obc_donor
+    from forcingkit.dispatcher import predict_obc_donor
 
     bbox_list = [
         request.bbox.min_lon,
@@ -316,7 +315,7 @@ async def cache_obc(request: OBCRequest) -> Dict[str, Any]:
 @app.post("/api/v1/obc/predict-donor")
 async def predict_obc_donor_endpoint(request: OBCRequest) -> Dict[str, Any]:
     try:
-        from ecodata_cache.dispatcher import predict_obc_donor
+        from forcingkit.dispatcher import predict_obc_donor
 
         bbox_list = [
             request.bbox.min_lon,
@@ -347,7 +346,7 @@ def generate_obc(request: OBCRequest) -> Dict[str, Any]:
         request.bbox.max_lon,
         request.bbox.max_lat,
     ]
-    from ecodata_cache.dispatcher import predict_obc_donor, dispatch_obc_request
+    from forcingkit.dispatcher import predict_obc_donor, dispatch_obc_request
 
     meta = predict_obc_donor(bbox_list)
     donor_id = meta.get("id", "unknown")
@@ -359,13 +358,11 @@ def generate_obc(request: OBCRequest) -> Dict[str, Any]:
     raw_id = hashlib.md5(hash_str.encode()).hexdigest()[:12]
     zarr_id = f"obc_{raw_id}"
     zarr_name = f"{zarr_id}.zarr"
-    cache_dir = os.environ.get(
-        "COASTAL_SIM_DATA_CACHE_DIR", os.path.expanduser("~/.cache/ecodata-cache")
-    )
+    cache_dir = settings.cache_dir()
     zarr_path = os.path.join(cache_dir, zarr_name)
 
-    from ecodata_cache.fetchers.necofs import OBC_SCHEMA
-    from ecodata_cache.zarr_stream import store_is_complete
+    from forcingkit.fetchers.necofs import OBC_SCHEMA
+    from forcingkit.zarr_stream import store_is_complete
 
     if not request.cache_bust and store_is_complete(zarr_path, (OBC_SCHEMA,)):
         return {
@@ -404,12 +401,7 @@ def generate_obc(request: OBCRequest) -> Dict[str, Any]:
 
 @app.get("/api/v1/obc/download/{zarr_id}")
 def download_obc(zarr_id: str):
-    cache_dir = Path(
-        os.environ.get(
-            "COASTAL_SIM_DATA_CACHE_DIR",
-            os.path.expanduser("~/.cache/ecodata-cache"),
-        )
-    )
+    cache_dir = Path(settings.cache_dir())
 
     # Handle both raw hash and obc_ prefixed hashes gracefully
     search_id = zarr_id if zarr_id.startswith("obc_") else f"obc_{zarr_id}"
@@ -444,7 +436,7 @@ def get_ndbc(request: NDBCRequest) -> Dict[str, Any]:
     """Observations at an NDBC buoy over a window, for validation: stdmet (sea and air
     temperature, pressure, wind, waves) and ADCP near-surface current as east and north
     components. Missing values are null."""
-    from ecodata_cache.fetchers.ndbc import fetch_ndbc
+    from forcingkit.fetchers.ndbc import fetch_ndbc
 
     try:
         data = fetch_ndbc(
@@ -473,16 +465,14 @@ class AtmosphereRequest(BaseModel):
 
 
 def _atmosphere_cache_dir() -> str:
-    return os.environ.get(
-        "COASTAL_SIM_DATA_CACHE_DIR", os.path.expanduser("~/.cache/ecodata-cache")
-    )
+    return settings.cache_dir()
 
 
 @app.post("/api/v1/atmosphere")
 def generate_atmosphere(request: AtmosphereRequest) -> Dict[str, Any]:
     """A prescribed atmosphere for an ocean model: HRRR hourly fields on a regular lon/lat grid,
     from one hour before `start_time` to one hour after the end, streamed to a Zarr store."""
-    from ecodata_cache.dispatcher import atmosphere_key, dispatch_atmosphere_request
+    from forcingkit.dispatcher import atmosphere_key, dispatch_atmosphere_request
 
     if request.source != "hrrr":
         raise HTTPException(

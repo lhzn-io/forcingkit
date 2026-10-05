@@ -13,10 +13,12 @@ from email.utils import format_datetime
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
-logger = logging.getLogger("ecodata_serve")
+logger = logging.getLogger("forcingkit_serve")
 
 REMOVED_ON = datetime(2026, 10, 5, tzinfo=timezone.utc)
-DOCS_URL = "https://github.com/lhzn-io/ecodata-cache/blob/main/docs/source/removed_endpoints.rst"
+DOCS_URL = (
+    "https://github.com/lhzn-io/forcingkit/blob/main/docs/source/removed_endpoints.rst"
+)
 
 _PARENT = (
     "POST /api/v1/obc: the parent ocean on true z (schema z-v2); its first record is the "

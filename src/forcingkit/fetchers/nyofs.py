@@ -10,6 +10,7 @@ import xarray as xr
 import pandas as pd
 import logging
 from typing import Optional, Tuple
+from forcingkit import settings
 
 logger = logging.getLogger(__name__)
 
@@ -227,7 +228,6 @@ def _open_nyofs_dataset(
                     return None
             else:
                 import concurrent.futures
-                import os
 
                 datasets: list[Optional[xr.Dataset]] = [None] * len(files)
                 fail_counts = [0]
@@ -250,7 +250,7 @@ def _open_nyofs_dataset(
                         fail_counts[0] += 1
                         return i, None
 
-                max_workers = int(os.environ.get("ECODATA_CACHE_MAX_WORKERS", 4))
+                max_workers = settings.max_workers()
                 with concurrent.futures.ThreadPoolExecutor(
                     max_workers=max_workers
                 ) as executor:

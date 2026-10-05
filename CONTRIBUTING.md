@@ -1,6 +1,6 @@
-# Contributing to ecodata-cache
+# Contributing to forcingkit
 
-Thank you for considering contributing to `ecodata-cache`. This repository is a community resource for providing clean, standardized ocean and atmospheric forcing boundaries for high-fidelity coastal hydrodynamic models. Whether you're fixing a bug, improving documentation, or adding a new data node, contributions are welcome.
+Thank you for considering contributing to `forcingkit`. This repository is a community resource for providing clean, standardized ocean and atmospheric forcing boundaries for high-fidelity coastal hydrodynamic models. Whether you're fixing a bug, improving documentation, or adding a new data node, contributions are welcome.
 
 ## Development Workflow
 
@@ -16,7 +16,7 @@ We use `uv` for Python package management.
 
 - All code must pass `ruff` (for formatting and linting) and `mypy` (for typing).
 - Ensure your changes are covered by tests where applicable (we use `pytest`). Tests are located in the `tests/` directory.
-- `ecodata_cache.fetchers` logic handles API integrations. If adding a new telemetry source (e.g., a new regional IOOS node), follow the patterns established in `ndbc.py` (observations) or `dbofs.py` (a parent ocean).
+- `forcingkit.fetchers` logic handles API integrations. If adding a new telemetry source (e.g., a new regional IOOS node), follow the patterns established in `ndbc.py` (observations) or `dbofs.py` (a parent ocean).
 - Keep the Sphinx documentation up to date.
 
 ### 3. Pull Requests

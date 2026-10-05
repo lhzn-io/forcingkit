@@ -45,4 +45,4 @@ RUN chown -R ${UID}:${GID} /app
 # Default port 9598
 EXPOSE 9598
 
-CMD ["uv", "run", "python", "-m", "ecodata_serve.main", "--host", "0.0.0.0", "--port", "9598"]
+CMD ["uv", "run", "python", "-m", "forcingkit_serve.main", "--host", "0.0.0.0", "--port", "9598"]

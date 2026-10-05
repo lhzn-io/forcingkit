@@ -1,5 +1,5 @@
 import pytest
-from ecodata_cache.fetchers.erddap import fetch_erddap_station_profiles
+from forcingkit.fetchers.erddap import fetch_erddap_station_profiles
 
 
 @pytest.mark.asyncio

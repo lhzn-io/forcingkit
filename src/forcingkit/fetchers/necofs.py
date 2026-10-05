@@ -3,9 +3,9 @@ import logging
 import pandas as pd
 import numpy as np
 import xarray as xr
-import os
 from typing import Optional
 from scipy.spatial import Delaunay
+from forcingkit import settings
 
 
 logger = logging.getLogger(__name__)
@@ -238,7 +238,7 @@ def iter_parent(
     at_node = at_elem = None
     h_grid = siglay_grid = None
     z_centres = None
-    max_workers = int(os.environ.get("ECODATA_CACHE_MAX_WORKERS", 4))
+    max_workers = settings.max_workers()
 
     current_dt = target_dt
     end_dt = target_dt + pd.Timedelta(hours=duration_hours - 1)

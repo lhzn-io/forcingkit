@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ecodata_cache.fetchers import ndbc
+from forcingkit.fetchers import ndbc
 
 STDMET = """#YY  MM DD hh mm WDIR WSPD GST  WVHT   DPD   APD MWD   PRES  ATMP  WTMP  DEWP  VIS  TIDE
 #yr  mo dy hr mn degT m/s  m/s     m   sec   sec deg    hPa  degC  degC  degC  nmi    ft

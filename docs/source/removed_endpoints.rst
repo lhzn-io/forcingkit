@@ -8,7 +8,7 @@ repositories.
 Until the next release, each removed route still answers, with **410 Gone** and a JSON body
 naming its replacement. The response carries ``Deprecation`` (RFC 9745) and ``Sunset``
 (RFC 8594) headers, both at the removal date, and a ``Link`` to this page. OpenAPI lists the
-routes as deprecated. The next release drops the stubs (``service/ecodata_serve/routers/removed.py``),
+routes as deprecated. The next release drops the stubs (``service/forcingkit_serve/routers/removed.py``),
 and the routes then answer 404.
 
 .. list-table::

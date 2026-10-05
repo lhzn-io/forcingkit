@@ -1,5 +1,5 @@
 def main():
-    print("Hello from ecodata-cache!")
+    print("Hello from forcingkit!")
 
 
 if __name__ == "__main__":

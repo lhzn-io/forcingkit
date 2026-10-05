@@ -1,7 +1,7 @@
 [project]
-name = "ecodata-cache"
+name = "forcingkit"
 version = "0.1.0"
-description = "Add your description here"
+description = "Spatiotemporal forcing for computational Earth-system models: selects, regrids and serves model-ready time series with provenance."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -45,7 +45,7 @@ select = ["E4", "E7", "E9", "F"]
 
 [tool.pytest.ini_options]
 # The project declares no [build-system], so `uv sync` never installs
-# ecodata_cache (src/) or ecodata_serve (service/) into the venv. Tests import
+# forcingkit (src/) or forcingkit_serve (service/) into the venv. Tests import
 # both directly, so put each source root on the path for the test session.
 pythonpath = ["src", "service"]
 markers = [

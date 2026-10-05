@@ -1,5 +1,5 @@
 document.addEventListener("DOMContentLoaded", () => {
-    console.log("ecodata-cache UI Initialized");
+    console.log("forcingkit UI Initialized");
     const datasetList = document.getElementById("datasetList");
     const datasetCount = document.getElementById("datasetCount");
     const purgeBtn = document.getElementById("purgeBtn");

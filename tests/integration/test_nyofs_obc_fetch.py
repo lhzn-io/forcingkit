@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "src"
 
 def test_nyofs_boundary_conditions():
     """Test NYOFS boundary conditions fetch."""
-    from ecodata_cache.fetchers.nyofs import fetch_nyofs_boundary_conditions
+    from forcingkit.fetchers.nyofs import fetch_nyofs_boundary_conditions
 
     # Throgs Neck Bridge area
     bbox = [-73.815, 40.785, -73.775, 40.815]

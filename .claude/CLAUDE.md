@@ -5,6 +5,6 @@
 
 ## Expected Follow-on Context
 
-- `/.agents/ecodata-cache.md`
+- `/.agents/forcingkit.md`
 
 Use this file as a compatibility entry point only.

@@ -1,4 +1,4 @@
-# Ecodata Cache — Copilot Compatibility
+# forcingkit — Copilot Compatibility
 
 This file exists for tools that specifically load `.github/copilot-instructions.md`.
 

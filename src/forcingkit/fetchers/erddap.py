@@ -1,6 +1,7 @@
 import os
 import logging
 import pandas as pd
+from forcingkit import settings
 
 logger = logging.getLogger(__name__)
 
@@ -12,10 +13,7 @@ def fetch_erddap_station_profiles(
     start_time: str,
     end_time: str,
     cache_dir: str = os.path.join(
-        os.environ.get(
-            "ECODATA_CACHE_CACHE_DIR",
-            os.path.expanduser("~/.cache/ecodata-cache"),
-        ),
+        settings.cache_dir(),
         "erddap",
     ),
     cache_bust: bool = False,
@@ -101,10 +99,7 @@ def fetch_erddap_stations_in_bbox(
     start_time: str,
     end_time: str,
     cache_dir: str = os.path.join(
-        os.environ.get(
-            "ECODATA_CACHE_CACHE_DIR",
-            os.path.expanduser("~/.cache/ecodata-cache"),
-        ),
+        settings.cache_dir(),
         "erddap",
     ),
     cache_bust: bool = False,

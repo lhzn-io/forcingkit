@@ -1,7 +1,7 @@
 # We will mock the actual fetchers so we don't hit Copernicus or S3
 def test_nyofs_expanded_bbox_covers_offshore_nj():
     """NYOFS domain_bbox min_lat should be 40.2 to accurately restrict its active domain."""
-    from ecodata_cache.fetchers import nyofs
+    from forcingkit.fetchers import nyofs
 
     meta = nyofs.get_metadata()
     assert meta["domain_bbox"][1] >= 40.0, (
@@ -11,7 +11,7 @@ def test_nyofs_expanded_bbox_covers_offshore_nj():
 
 def test_nyofs_rejects_offshore_nj_bbox():
     """NYOFS supports_bbox must REJECT a bbox in the expanded NY Bight region."""
-    from ecodata_cache.fetchers import nyofs
+    from forcingkit.fetchers import nyofs
 
     # A bbox fully within [-74.3, 39.5, -73.3, 41.1]
     bbox = [-74.1, 39.6, -73.5, 39.9]
@@ -19,11 +19,11 @@ def test_nyofs_rejects_offshore_nj_bbox():
 
 
 def test_dispatch_station_profiles_request_wlis(mocker):
-    import os
-    from ecodata_cache.dispatcher import dispatch_station_profiles_request
+    from forcingkit import settings
+    from forcingkit.dispatcher import dispatch_station_profiles_request
 
     mock_fetcher = mocker.patch(
-        "ecodata_cache.fetchers.erddap.fetch_erddap_station_profiles"
+        "forcingkit.fetchers.erddap.fetch_erddap_station_profiles"
     )
     mock_fetcher.return_value = {"surface": {"2024-05-01T00:00:00": 10.0}}
 
@@ -35,12 +35,6 @@ def test_dispatch_station_profiles_request_wlis(mocker):
         station_id="WLIS",
         start_time="2024-05-01T00:00:00Z",
         end_time="2024-05-01T06:00:00Z",
-        cache_dir=os.path.join(
-            os.environ.get(
-                "ECODATA_CACHE_CACHE_DIR",
-                os.path.expanduser("~/.cache/ecodata-cache"),
-            ),
-            "erddap",
-        ),
+        cache_dir=settings.cache_dir("erddap"),
         cache_bust=False,
     )

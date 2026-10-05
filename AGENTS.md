@@ -1,4 +1,4 @@
-# Ecodata Cache Agent Guide
+# forcingkit Agent Guide
 
 This file is the canonical, vendor-neutral entry point for agent
 guidance in this repository.
@@ -21,7 +21,7 @@ guidance in this repository.
 
 ## Repository Focus
 
-Ecodata Cache is a Python microservice that fetches, harmonizes, regrids, and serves
+forcingkit is a Python microservice that fetches, harmonizes, regrids, and serves
 real-time and historical forcing to the `coastal-sim` Julia physics engine: the parent
 ocean (`/api/v1/obc`, schema z-v2), the HRRR atmosphere (`/api/v1/atmosphere`), tides,
 and station telemetry and NDBC observations for validation.
@@ -61,7 +61,7 @@ and station telemetry and NDBC observations for validation.
 
 ## Where To Read Next
 
-- `.agents/ecodata-cache.md`: architecture pipeline, fetcher tier, testing strategy
+- `.agents/forcingkit.md`: architecture pipeline, fetcher tier, testing strategy
   and gotchas
 
 ## Compatibility

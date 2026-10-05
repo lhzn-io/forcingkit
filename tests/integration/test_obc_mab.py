@@ -6,7 +6,7 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../src"))
 )
 
-from ecodata_cache.dispatcher import dispatch_obc_request
+from forcingkit.dispatcher import dispatch_obc_request
 
 
 @pytest.mark.integration
