@@ -29,6 +29,11 @@ dependencies = [
     "matplotlib>=3.10.9",
 ]
 
+[project.urls]
+Documentation = "https://forcingkit.docs.lhzn.io"
+Issues = "https://github.com/lhzn-io/forcingkit/issues"
+Source = "https://github.com/lhzn-io/forcingkit"
+
 [tool.ruff]
 # This project previously had no [tool.ruff] section, so it inherited whatever
 # rule set the installed ruff happened to default to. Ruff 0.16 broadened those

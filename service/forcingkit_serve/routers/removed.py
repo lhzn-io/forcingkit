@@ -2,8 +2,8 @@
 
 Each answers 410 Gone with the endpoint that replaces it, so a client still calling one learns
 where to go instead of meeting a bare 404. The response carries `Deprecation` (RFC 9745) and
-`Sunset` (RFC 8594) headers, both at the removal date, and `Link` headers to the notes in
-docs/source/removed_endpoints.rst. The next release drops this module and its `include_router`.
+`Sunset` (RFC 8594) headers, both at the removal date, and `Link` headers to the notes at
+forcingkit.docs.lhzn.io (docs/source/removed_endpoints.rst). The next release drops this module and its `include_router`.
 """
 
 import logging
@@ -16,9 +16,7 @@ from fastapi.responses import JSONResponse
 logger = logging.getLogger("forcingkit_serve")
 
 REMOVED_ON = datetime(2026, 10, 5, tzinfo=timezone.utc)
-DOCS_URL = (
-    "https://github.com/lhzn-io/forcingkit/blob/main/docs/source/removed_endpoints.rst"
-)
+DOCS_URL = "https://forcingkit.docs.lhzn.io/removed_endpoints.html"
 
 _PARENT = (
     "POST /api/v1/obc: the parent ocean on true z (schema z-v2); its first record is the "

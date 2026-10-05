@@ -1,34 +1,30 @@
 # Configuration file for the Sphinx documentation builder.
-#
-# For the full list of built-in configuration values, see the documentation:
 # https://www.sphinx-doc.org/en/master/usage/configuration.html
 
-# -- Project information -----------------------------------------------------
-# https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
+import os
+import sys
+
+sys.path.insert(0, os.path.abspath("../../src"))
 
 project = "forcingkit"
-copyright = "2026, lhzn.io"
-author = "lhzn.io"
-
-version = "1.0.0"
-release = "1.0.0"
-
-# -- General configuration ---------------------------------------------------
-# https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
+copyright = "2026, Long Horizon Observatory"
+author = "Daniel Fry"
+release = "0.1.0"
 
 extensions = [
     "sphinx.ext.autodoc",
+    "sphinx.ext.napoleon",
+    "sphinx.ext.viewcode",
+    "sphinx_rtd_theme",
+    "myst_parser",
 ]
 
 templates_path = ["_templates"]
-from typing import List  # noqa: E402
-
-exclude_patterns: List[str] = []
+exclude_patterns: list[str] = []
 
 language = "en"
 
-# -- Options for HTML output -------------------------------------------------
-# https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
-
-html_theme = "alabaster"
+html_theme = "sphinx_rtd_theme"
 html_static_path = ["_static"]
+# CNAME for the custom domain forcingkit.docs.lhzn.io, copied to the site root.
+html_extra_path = ["_extra"]

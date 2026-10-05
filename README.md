@@ -12,7 +12,7 @@ Spatiotemporal forcing for computational Earth-system models: selects, regrids a
 
 `forcingkit` sits between operational and archive data providers (NOAA HRRR, NECOFS, NOAA OFS, HYCOM, NDBC, CO-OPS) and model codes such as `Oceananigans.jl`. It delivers a model's parent ocean on true z levels (`/api/v1/obc`) and its HRRR surface atmosphere on a regular grid (`/api/v1/atmosphere`), plus station observations for validation, as schema-versioned Zarr stores that record their sources.
 
-forcingkit was named ecodata-cache until 2026-10-05; GitHub redirects the old repository URLs. The Python package is `forcingkit` (was `ecodata_cache`), and environment variables use the `FORCINGKIT_` prefix; the old names are still read, with a warning, until the next release. The routes removed on the same date are listed in [docs/source/removed_endpoints.rst](docs/source/removed_endpoints.rst).
+forcingkit was named ecodata-cache until 2026-10-05; GitHub redirects the old repository URLs. The Python package is `forcingkit` (was `ecodata_cache`), and environment variables use the `FORCINGKIT_` prefix; the old names are still read, with a warning, until the next release. Documentation: <https://forcingkit.docs.lhzn.io>, including the [routes removed on the same date](https://forcingkit.docs.lhzn.io/removed_endpoints.html).
 
 ## Goals
 
