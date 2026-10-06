@@ -2,7 +2,7 @@ Atmospheric Forcing Datasets
 ============================
 
 As of 2026-10-04. Which atmospheric datasets can force a coastal ocean model through this service
-or through NumericalEarth, how they compare, and which one the CoastalSim configurations use.
+or through `NumericalEarth <https://github.com/NumericalEarth/NumericalEarth.jl>`__, how they compare, and which to choose.
 
 An ocean model's surface fluxes need, at every hour of the run: 10 m wind (eastward and
 northward), 2 m air temperature and specific humidity, surface pressure, precipitation, and
@@ -23,22 +23,23 @@ Summary
      - Output step
      - Coverage
      - Latency
-     - Path in our stack
-   * - **HRRR** (NOAA NCEP)
+     - Path to a model
+   * - **HRRR** (`NOAA GSL <https://gsl.noaa.gov/>`__, `NCEP <https://www.nco.ncep.noaa.gov/>`__)
      - Hourly-cycling forecast, 3 km convection-allowing, radar assimilation
      - 3 km, Lambert conformal over CONUS
      - 1 h (15 min for some fields)
      - CONUS; archive on AWS from 2014-07-30
      - About an hour after each cycle
-     - **forcingkit** ``/api/v1/atmosphere`` (schema ``hrrr-atm-v1``); default for CoastalSim
-   * - **ERA5** (ECMWF, Copernicus C3S)
+     - **forcingkit** ``/api/v1/atmosphere`` (schema ``hrrr-atm-v1``); the default
+   * - **ERA5** (`ECMWF <https://www.ecmwf.int/>`__, `Copernicus C3S
+       <https://climate.copernicus.eu/>`__)
      - Global reanalysis (4D-Var)
      - 0.25 degrees (about 31 km)
      - 1 h
      - 1940 to present
      - ERA5T about 5 days; final ERA5 2 to 3 months
-     - **NumericalEarth** ``ERA5PrescribedAtmosphere`` (coastal-sim ``atmosphere = "era5"``)
-   * - **RRFS v1** (NOAA NCEP)
+     - **NumericalEarth** ``ERA5PrescribedAtmosphere``
+   * - **RRFS v1** (`NOAA GSL <https://gsl.noaa.gov/rrfs/>`__, NCEP)
      - Hourly-cycling forecast, FV3 limited-area, 3 km
      - 3 km, North America
      - 1 h
@@ -52,28 +53,29 @@ Summary
      - Retired 2026-10-06 in favour of RRFS
      - Four cycles a day, to 60 h
      - Not integrated; do not adopt
-   * - **GFS** (NOAA NCEP)
+   * - **GFS** (`NOAA NCEP
+       <https://www.emc.ncep.noaa.gov/emc/pages/numerical_forecast_systems/gfs.php>`__)
      - Global forecast, FV3
      - 0.25 degrees
      - 1 h to 120 h, then 3 h
      - Global; NODD archive on AWS
      - Four cycles a day, to 384 h
      - Not integrated; the natural extension past HRRR's 48 h in forecast mode
-   * - **ECMWF IFS open data**
+   * - **ECMWF IFS** `open data <https://www.ecmwf.int/en/forecasts/datasets/open-data>`__
      - Global forecast
      - 0.25 degrees
      - 3 h, then 6 h
      - Global; real time
      - Four cycles a day, to 15 days (00 and 12 UTC)
      - Not integrated; CC-BY-4.0 since 2025-10-01
-   * - **JRA55-do** (JMA, MRI)
+   * - **JRA55-do** (JMA, `MRI <https://www.mri-jma.go.jp/index_en.html>`__)
      - Reanalysis adjusted for ocean-sea-ice models
      - About 0.5 degrees
      - 3 h
      - 1958-01-01 to 2024-02-01, final version 1.6.0
      - Discontinued (JRA-55 ended January 2024; successor JRA-3Q)
      - **NumericalEarth** ``JRA55PrescribedAtmosphere`` (its catalogue ends 2019-12-31)
-   * - **ECCO v4** (NASA JPL)
+   * - **ECCO v4** (`ECCO Consortium <https://ecco-group.org/>`__, NASA JPL)
      - Ocean state estimate's adjusted forcing
      - About 1 degree
      - Monthly
@@ -87,9 +89,13 @@ Datasets in use
 HRRR (default)
 ~~~~~~~~~~~~~~
 
-*Provenance.* NOAA NCEP's High-Resolution Rapid Refresh, version 4, a 3 km convection-allowing
-model that assimilates radar every 15 minutes and starts a new forecast every hour. Distributed
-through the NOAA Open Data Dissemination programme in the ``noaa-hrrr-bdp-pds`` bucket on AWS
+*Provenance.* NOAA's `High-Resolution Rapid Refresh <https://rapidrefresh.noaa.gov/hrrr/>`__,
+version 4, developed by the NOAA Global Systems Laboratory and run by NCEP: a 3 km
+convection-allowing model that assimilates radar every 15 minutes and starts a new forecast every
+hour (`Dowell et al., 2022 <https://doi.org/10.1175/WAF-D-21-0151.1>`__; `James et al., 2022
+<https://doi.org/10.1175/WAF-D-21-0130.1>`__). Distributed through the `NOAA Open Data
+Dissemination <https://www.noaa.gov/information-technology/open-data-dissemination>`__ programme
+in the `noaa-hrrr-bdp-pds <https://registry.opendata.aws/noaa-hrrr-pds/>`__ bucket on AWS
 (us-east-1), anonymous, from 2014-07-30 to the present. NOAA open data: free to use; NOAA asks
 for attribution and that modified products not be presented as NOAA's.
 
@@ -134,8 +140,8 @@ atmosphere regridder accepts. Records run from one hour before the run start to 
 end; a missing message or hour raises, and the store is published only when complete. Building
 one hour takes about 6.5 s on a warm connection, so a 168 h window takes about 19 minutes.
 
-*Strengths.* Resolves the land-sea contrast, sea breezes and frontal timing at the scale of our
-domains (MAB is 15 by 17 km; LIS 85 by 65 km). Hourly radiation and precipitation. No credentials.
+*Strengths.* Resolves the land-sea contrast, sea breezes and frontal timing at the scale of
+coastal domains from about 15 to 85 km across. Hourly radiation and precipitation. No credentials.
 
 *Limits.* CONUS only. A forecast product, not a reanalysis: it carries forecast-model biases and is
 not homogeneous across HRRR versions (v4 since December 2020). Radiation is instantaneous.
@@ -143,24 +149,25 @@ not homogeneous across HRRR versions (v4 since December 2020). Radiation is inst
 ERA5 (fallback)
 ~~~~~~~~~~~~~~~
 
-*Provenance.* ECMWF's fifth-generation global reanalysis for the Copernicus Climate Change
-Service: 0.25 degree grid (about 31 km), hourly, 1940 to the present. ERA5T, the initial release,
+*Provenance.* `ECMWF <https://www.ecmwf.int/>`__'s fifth-generation global reanalysis for the
+`Copernicus Climate Change Service <https://climate.copernicus.eu/>`__ (`Hersbach et al., 2020
+<https://doi.org/10.1002/qj.3803>`__): 0.25 degree grid (about 31 km), hourly, 1940 to the present. ERA5T, the initial release,
 appears about five days behind real time and is overwritten by the final ERA5 two to three months
-later. Requires a free Copernicus Climate Data Store account (credentials in ``~/.cdsapirc``);
+later. Requires a free `Copernicus Climate Data Store <https://cds.climate.copernicus.eu/>`__ account (credentials in ``~/.cdsapirc``);
 Copernicus licence, attribution required.
 
-*How it is used.* CoastalSim reads it through NumericalEarth's ``ERA5PrescribedAtmosphere`` and
-``ERA5PrescribedRadiation`` over the bbox padded by 0.5 degrees, with linear time indexing and one
-hour of padding past the end. Accumulated fields (precipitation, radiation) are hour-ending means
-that NumericalEarth places at the centre of their hour. NumericalEarth 0.8.1's catalogue stops at
-2025-12-31; coastal-sim extends it to six days before today until upstream rolls the date.
+*How it is used.* A model reads it through NumericalEarth's ``ERA5PrescribedAtmosphere`` and
+``ERA5PrescribedRadiation``, for example over the bbox padded by 0.5 degrees, with linear time
+indexing and one hour of padding past the end. Accumulated fields (precipitation, radiation) are
+hour-ending means that NumericalEarth places at the centre of their hour. NumericalEarth 0.8.1's
+catalogue stops at 2025-12-31; later dates need the catalogue extended until upstream rolls it.
 
 *Strengths.* Homogeneous, global, long, assimilates far more observations than any forecast; the
 standard against which forcing biases are judged.
 
-*Limits.* At 31 km a domain like MAB spans one or two ERA5 cells, so the forcing is nearly uniform
-and smears the coast: in the first hours of 2026-04-02 over MAB, the ERA5 box (which includes New
-Jersey land) was about 3 K warmer at 2 m and had about half HRRR's wind speed. Latency rules out
+*Limits.* At 31 km a 15 km coastal domain spans one or two ERA5 cells, so the forcing is nearly
+uniform and smears the coast: in the first hours of 2026-04-02 over such a domain off New Jersey,
+the ERA5 box (which includes New Jersey land) was about 3 K warmer at 2 m and had about half HRRR's wind speed. Latency rules out
 anything closer than five days to the present.
 
 Choosing
@@ -177,16 +184,38 @@ Choosing
    * - Hindcast before 2014-07-30, outside CONUS, or a reanalysis-grade comparison run
      - ERA5
    * - Forecast to 48 h
-     - HRRR forecast mode (planned, Sprint 4): one cycle's f01 to f48 from the 00, 06, 12 or 18 UTC
+     - HRRR forecast mode (planned): one cycle's f01 to f48 from the 00, 06, 12 or 18 UTC
        cycle
    * - Forecast beyond 48 h
      - HRRR to 48 h, then GFS or ECMWF IFS open data (not integrated); RRFS to 84 h once it is
        established in operations
    * - Multi-decade or climate-scale forcing
-     - ERA5, or JRA55-do through NumericalEarth (to 2019 in its catalogue)
+     - ERA5, or JRA55-do (`Tsujino et al., 2018 <https://doi.org/10.1016/j.ocemod.2018.07.002>`__)
+       through NumericalEarth (to 2019 in its catalogue)
 
 References
 ----------
+
+Citations
+~~~~~~~~~
+
+- Dowell, D. C., C. R. Alexander, E. P. James, et al. (2022). The High-Resolution Rapid Refresh
+  (HRRR): An hourly updating convection-allowing forecast model. Part I: Motivation and system
+  description. *Weather and Forecasting*, 37(8), 1371-1395.
+  `doi:10.1175/WAF-D-21-0151.1 <https://doi.org/10.1175/WAF-D-21-0151.1>`__
+- James, E. P., C. R. Alexander, D. C. Dowell, et al. (2022). The High-Resolution Rapid Refresh
+  (HRRR): An hourly updating convection-allowing forecast model. Part II: Forecast performance.
+  *Weather and Forecasting*, 37(8), 1397-1417.
+  `doi:10.1175/WAF-D-21-0130.1 <https://doi.org/10.1175/WAF-D-21-0130.1>`__
+- Hersbach, H., B. Bell, P. Berrisford, et al. (2020). The ERA5 global reanalysis. *Quarterly
+  Journal of the Royal Meteorological Society*, 146(730), 1999-2049.
+  `doi:10.1002/qj.3803 <https://doi.org/10.1002/qj.3803>`__
+- Tsujino, H., S. Urakawa, H. Nakano, et al. (2018). JRA-55 based surface dataset for driving
+  ocean-sea-ice models (JRA55-do). *Ocean Modelling*, 130, 79-139.
+  `doi:10.1016/j.ocemod.2018.07.002 <https://doi.org/10.1016/j.ocemod.2018.07.002>`__
+
+Links
+~~~~~
 
 - NOAA HRRR on AWS: https://registry.opendata.aws/noaa-hrrr-pds/
 - NOAA RRFS: https://gsl.noaa.gov/rrfs/ ; operational date and retirements:

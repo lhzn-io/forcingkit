@@ -14,7 +14,7 @@ Spatiotemporal forcing for computational Earth-system models: selects, regrids a
 
 `forcingkit` sits between operational and archive data providers (NOAA HRRR, NECOFS, NOAA OFS, HYCOM, NDBC, CO-OPS) and model codes such as `Oceananigans.jl`. It delivers a model's parent ocean on true z levels (`/api/v1/obc`) and its HRRR surface atmosphere on a regular grid (`/api/v1/atmosphere`), plus station observations for validation, as schema-versioned Zarr stores that record their sources.
 
-forcingkit was named ecodata-cache until 2026-10-05; GitHub redirects the old repository URLs. The Python package is `forcingkit` (was `ecodata_cache`), and environment variables use the `FORCINGKIT_` prefix; the old names are still read, with a warning, until the next release. Documentation: <https://forcingkit.docs.lhzn.io>, including the [routes removed on the same date](https://forcingkit.docs.lhzn.io/removed_endpoints.html).
+Documentation: <https://forcingkit.docs.lhzn.io>.
 
 ## Goals
 
@@ -37,9 +37,12 @@ The primary goal of forcingkit is to provide clean, standardized ocean and atmos
 
 ## Roadmap
 
-- **Enhanced IOOS Coverage**: Expanding our data fetchers to support more regional nodes across the West Coast (WCOFS) and Gulf of Mexico (NGOFS2).
-- **Improved Caching Policies**: Implementing dynamic cache invalidation based on NOAA operational forecast updates to ensure realtime predictions stay synchronized.
-- **Variable Expansions**: Providing native spatiotemporal transformations for wave spectra and biogeochemical tracers.
+- **Coverage first**: a global parent for current dates (Copernicus GLO12, GLORYS12 for 1993 on, NOAA RTOFS), the remaining NOAA forecast systems (West Coast, Gulf, Chesapeake, Great Lakes, Alaska), the Doppio reanalysis for 2007 to 2024 in the Northeast, HRRR Alaska and ECMWF IFS for the atmosphere, and a first European ocean source from Copernicus Marine (IBI or the North West Shelf).
+- **Resolution second**: the NYOFS fine grid, the Monterey Bay nests of WCOFS, and SFBOFS inside San Francisco Bay.
+- **NYOFS and DBOFS as z-v3 parents, and HYCOM after September 2024**: both on true depths with geographic axes, and a successor for HYCOM's `expt_93.0`.
+- **Forecast mode and cache policy**: HRRR forecast cycles, and invalidation of forecast-built stores when a newer cycle is published.
+
+The full list, with what each candidate offers, is at <https://forcingkit.docs.lhzn.io/roadmap.html>. Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Architecture overview
 
