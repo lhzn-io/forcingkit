@@ -26,5 +26,6 @@ language = "en"
 
 html_theme = "sphinx_rtd_theme"
 html_static_path = ["_static"]
+html_css_files = ["custom.css"]
 # CNAME for the custom domain forcingkit.docs.lhzn.io, copied to the site root.
 html_extra_path = ["_extra"]

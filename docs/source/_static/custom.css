@@ -1,0 +1,24 @@
+/* Use more of a wide screen: the theme caps the content column at 800 px. */
+.wy-nav-content {
+  max-width: 1200px;
+}
+
+/* Let table cells wrap instead of forcing a horizontal scrollbar. The theme sets nowrap on
+   every cell and puts tables in a scrolling container. */
+.wy-table-responsive table td,
+.wy-table-responsive table th {
+  white-space: normal;
+}
+
+/* On wide screens wrapped tables fit, so drop the scroll container; on phones keep it, so a
+   table too wide even when wrapped scrolls rather than being clipped. */
+@media screen and (min-width: 768px) {
+  .wy-table-responsive {
+    overflow-x: visible;
+  }
+}
+
+/* Keep long code spans (archive paths, URLs) from widening a column past the page. */
+.wy-table-responsive table td code {
+  overflow-wrap: anywhere;
+}
