@@ -144,6 +144,15 @@ class TideRequest(BaseModel):
     cache_bust: bool = False
 
 
+class CurrentPredictionsRequest(BaseModel):
+    station_id: str
+    bin: int
+    start_time: str  # ISO8601 string
+    end_time: str  # ISO8601 string
+    interval_minutes: int = 30
+    cache_bust: bool = False
+
+
 class TelemetryRequest(BaseModel):
     station_id: str
     start_time: str  # ISO8601 string
@@ -210,6 +219,47 @@ async def get_tide_data(request: TideRequest) -> Dict[str, Any]:
         return {"status": "success", "data": data}
     except Exception as e:
         logger.error(f"Tide fetch failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class CurrentStationsRequest(BaseModel):
+    bbox: BoundingBox
+    cache_bust: bool = False
+
+
+@app.post("/api/v1/currents/stations")
+def get_current_stations(request: CurrentStationsRequest) -> Dict[str, Any]:
+    """Harmonic CO-OPS current-prediction stations and bins inside a bounding box."""
+    from forcingkit.fetchers.noaa import fetch_noaa_current_stations
+
+    b = request.bbox
+    try:
+        stations = fetch_noaa_current_stations(
+            [b.min_lon, b.min_lat, b.max_lon, b.max_lat], cache_bust=request.cache_bust
+        )
+        return {"status": "success", "data": stations}
+    except Exception as e:
+        logger.error(f"Current station listing failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/v1/currents")
+def get_current_predictions(request: CurrentPredictionsRequest) -> Dict[str, Any]:
+    """Harmonic current predictions for a CO-OPS station and depth bin (along the flood axis)."""
+    from forcingkit.fetchers.noaa import fetch_noaa_current_predictions
+
+    try:
+        data = fetch_noaa_current_predictions(
+            station_id=request.station_id,
+            bin_number=request.bin,
+            start_time=request.start_time,
+            end_time=request.end_time,
+            interval_minutes=request.interval_minutes,
+            cache_bust=request.cache_bust,
+        )
+        return {"status": "success", "data": data}
+    except Exception as e:
+        logger.error(f"Current predictions fetch failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
