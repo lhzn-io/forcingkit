@@ -12,10 +12,9 @@ from pathlib import Path
 
 logger = logging.getLogger("forcingkit")
 
-# New name -> old names still read, in order. The cache directory had two names: the service
-# routes read COASTAL_SIM_DATA_CACHE_DIR and the fetchers ECODATA_CACHE_CACHE_DIR.
+# New name -> old names still read, in order.
 LEGACY_ENV: dict[str, tuple[str, ...]] = {
-    "FORCINGKIT_CACHE_DIR": ("ECODATA_CACHE_CACHE_DIR", "COASTAL_SIM_DATA_CACHE_DIR"),
+    "FORCINGKIT_CACHE_DIR": ("ECODATA_CACHE_CACHE_DIR",),
     "FORCINGKIT_MAX_WORKERS": ("ECODATA_CACHE_MAX_WORKERS",),
     # The elevation service, renamed topobathysim -> topobathykit on 2026-10-05.
     "TOPOBATHYKIT_URL": ("TOPOBATHYSIM_URL",),

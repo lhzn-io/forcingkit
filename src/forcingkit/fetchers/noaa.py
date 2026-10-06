@@ -64,7 +64,7 @@ def fetch_noaa_tide_data(
         "units": "metric",
         "time_zone": "gmt",
         "format": "json",
-        "application": "lhzn_coastal_sim",
+        "application": "forcingkit",
     }
 
     try:

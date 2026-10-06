@@ -7,7 +7,6 @@ from forcingkit import settings
 ALL_NAMES = [
     "FORCINGKIT_CACHE_DIR",
     "ECODATA_CACHE_CACHE_DIR",
-    "COASTAL_SIM_DATA_CACHE_DIR",
     "FORCINGKIT_MAX_WORKERS",
     "TOPOBATHYKIT_URL",
     "TOPOBATHYSIM_URL",
@@ -38,13 +37,11 @@ def test_new_name_wins_over_legacy_names(clean_env, monkeypatch):
     assert settings.cache_dir() == "/new"
 
 
-@pytest.mark.parametrize(
-    "old", ["ECODATA_CACHE_CACHE_DIR", "COASTAL_SIM_DATA_CACHE_DIR"]
-)
-def test_legacy_cache_names_still_read_with_a_warning(clean_env, monkeypatch, old):
-    monkeypatch.setenv(old, "/old")
+def test_legacy_cache_name_still_read_with_a_warning(clean_env, monkeypatch):
+    monkeypatch.setenv("ECODATA_CACHE_CACHE_DIR", "/old")
     with pytest.warns(
-        FutureWarning, match=f"{old} is deprecated; use FORCINGKIT_CACHE_DIR"
+        FutureWarning,
+        match="ECODATA_CACHE_CACHE_DIR is deprecated; use FORCINGKIT_CACHE_DIR",
     ):
         assert settings.cache_dir("erddap") == os.path.join("/old", "erddap")
 

@@ -22,9 +22,10 @@ guidance in this repository.
 ## Repository Focus
 
 forcingkit is a Python microservice that fetches, harmonizes, regrids, and serves
-real-time and historical forcing to the `coastal-sim` Julia physics engine: the parent
-ocean (`/api/v1/obc`, schema z-v2), the HRRR atmosphere (`/api/v1/atmosphere`), tides,
-and station telemetry and NDBC observations for validation.
+real-time and historical forcing to downstream ocean models (for example ones built on
+Oceananigans.jl or NumericalEarth): the parent ocean (`/api/v1/obc`, schema z-v3), the
+HRRR atmosphere (`/api/v1/atmosphere`), tides, and station telemetry and NDBC
+observations for validation.
 
 ## Core Rules
 

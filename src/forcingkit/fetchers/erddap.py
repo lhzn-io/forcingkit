@@ -20,7 +20,7 @@ def fetch_erddap_station_profiles(
 ) -> dict:
     """
     Fetches 3-depth temperature profiles for a given station.
-    Targeting LIS stations via UConn ERDDAP.
+    Targets Long Island Sound stations on the UConn ERDDAP server.
 
     Args:
         station_id: Station ID, e.g., "WLIS", "EXRX"
@@ -105,7 +105,8 @@ def fetch_erddap_stations_in_bbox(
     cache_bust: bool = False,
 ) -> dict:
     """
-    Finds all known LIS stations within the bounding box and fetches their profiles.
+    Finds the known Long Island Sound stations within the bounding box and fetches their
+    profiles.
     bbox: [max_lat, min_lon, min_lat, max_lon] or [min_lon, min_lat, max_lon, max_lat]
     """
     # Accept standard Julia order (min_lon, min_lat, max_lon, max_lat)

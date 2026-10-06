@@ -10,9 +10,9 @@ from forcingkit.dispatcher import dispatch_obc_request
 
 
 @pytest.mark.integration
-def test_dispatch_mab_obc_24h():
+def test_dispatch_offshore_nj_obc():
     """
-    Test a 24 hour OBC fetch over the Mid-Atlantic Bight to ensure
+    Test an OBC fetch off central New Jersey to ensure
     NECOFS does not crash (`import os` issue), and HYCOM gracefully
     passes over without issuing invalid empty slices (`tau[16809:1:16808]`).
     """
@@ -39,9 +39,9 @@ def test_dispatch_mab_obc_24h():
 
     assert len(ds.time) > 0, "No time steps fetched."
     print(
-        f"\nSuccessfully fetched MAB OBC data for {hours} hours on {ds.attrs.get('Description', 'NECOFS')}!"
+        f"\nFetched {hours} h of OBC data off central New Jersey from {ds.attrs.get('source', 'unknown')}"
     )
 
 
 if __name__ == "__main__":
-    test_dispatch_mab_obc_24h()
+    test_dispatch_offshore_nj_obc()

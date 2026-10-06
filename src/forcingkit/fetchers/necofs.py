@@ -130,7 +130,8 @@ class Barycentric:
     barycentric weights computed once.
 
     Equivalent to `LinearNDInterpolator(tri, values)(targets)`, which repeats the search for every
-    call: per parent hour that is one search per layer per variable (181 for LIS), each over every
+    call: per parent hour that is one search per layer per variable (181 for 45 layers of four
+    fields plus sea surface height), each over every
     target point. Values may carry leading dimensions: (..., npoints) -> (..., *shape). Targets
     outside the triangulation are NaN.
     """

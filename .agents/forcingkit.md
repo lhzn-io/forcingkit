@@ -3,8 +3,8 @@
 ## Mission
 
 Python microservice providing real-time and historical forcing (the parent ocean and
-the HRRR atmosphere) and validation observations to the `coastal-sim` Julia physics
-engine.
+the HRRR atmosphere) and validation observations to downstream ocean models, for
+example ones built on Oceananigans.jl or NumericalEarth.
 
 ## Environment
 
@@ -41,7 +41,7 @@ HTTP Request → service/forcingkit_serve/main.py
 *Note: Because the architecture is modular, a future roadmap item includes the integration of TPXO (via `tpxo.py`) given usage rights.*
 
 Atmospheric forcing: HRRR from 2014-07-30 (`hrrr_atmosphere.py`, `/api/v1/atmosphere`).
-Earlier runs use ERA5 through NumericalEarth in coastal-sim, not this service.
+Earlier runs use ERA5 through NumericalEarth in the model, not this service.
 
 ## Testing
 
@@ -89,7 +89,7 @@ uv run python -c "from forcingkit.fetchers import nyofs; print(nyofs.get_metadat
 - **Mocking strategy**: Dispatcher unit tests check tuple/dict return
   boundaries carefully. When modifying mocked fetchers, track
   keyword-argument vs positional argument boundaries.
-- **Grid normalization**: `coastal-sim` expects elevations positive
+- **Grid normalization**: downstream models expect elevations positive
   up (LMSL/NAVD88). Normalize any inverted datasets in the fetcher
   tier before the dispatcher sees them.
 - **Cache keys**: Cache Zarr keys are deterministic hashes of bbox
