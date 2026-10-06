@@ -1,18 +1,38 @@
 """
 NYOFS (NOAA New York / New Jersey Operational Forecast System) fetcher.
 
-Provides Initial Conditions (IC) and Open Boundary Conditions (OBC) from Princeton Ocean
-Model (POM) structured curvilinear grid via OPeNDAP.
+Provides Open Boundary Conditions (OBC) from the Princeton Ocean Model (POM) coarse
+curvilinear grid. Recent data comes from the CO-OPS FMRC aggregation; older data is the chain
+of per-cycle nowcast files, from AWS S3 (per-day layout, from 2024-11-19) or NCEI THREDDS.
 """
 
-import numpy as np
-import xarray as xr
-import pandas as pd
+import concurrent.futures
 import logging
 from typing import Optional, Tuple
+
+import numpy as np
+import pandas as pd
+import xarray as xr
+
 from forcingkit import settings
 
 logger = logging.getLogger(__name__)
+
+FMRC_URL = (
+    "https://opendap.co-ops.nos.noaa.gov/thredds/dodsC/"
+    "NYOFS/fmrc/Aggregated_7_day_NYOFS_Fields_Forecast_best.ncd"
+)
+NCEI_BASE = "https://www.ncei.noaa.gov/thredds/dodsC/model-nyofs-files"
+AWS_BASE = "s3://noaa-nos-ofs-pds/nyofs/netcdf"
+
+# AWS holds one directory per day from 2024-11-19 (that day has only the 23 UTC cycle). Before
+# that, AWS has flat month directories with gaps, so those dates are read from NCEI instead.
+AWS_PER_DAY_FROM = pd.Timestamp("2024-11-19")
+# NCEI file names changed with the 2024-09-09 cycles.
+NCEI_NEW_NAMES_FROM = pd.Timestamp("2024-09-09")
+
+# Each nowcast file holds the 6 hourly records up to its cycle time: t05z holds 00 to 05 UTC.
+NOWCAST_CYCLE_HOURS = (5, 11, 17, 23)
 
 
 def get_metadata() -> dict:
@@ -22,7 +42,9 @@ def get_metadata() -> dict:
         "name": "NOAA NYOFS (NY/NJ Harbor)",
         "resolution_approx_m": 100.0,
         "type_desc": "Structured curvilinear POM grid",
-        "domain_bbox": [-74.3, 40.2, -73.3, 41.1],
+        # Extent of the coarse grid (land cells included), so a box NYOFS ranks first for has
+        # NYOFS cells under it.
+        "domain_bbox": [-74.475, 40.389, -73.743, 40.940],
     }
 
 
@@ -48,228 +70,151 @@ def _to_dap_url(url: str) -> str:
     return url.replace("https://", "dap2://").replace("http://", "dap2://")
 
 
-def _get_nyofs_url(target_dt: pd.Timestamp) -> Tuple[str, str]:
+def _get_nyofs_url(target_dt: pd.Timestamp) -> Tuple[str, Optional[str]]:
     """
-    Resolve NYOFS data access URL and mode.
+    Resolve the NYOFS access mode for a start time.
 
-    Returns (access_mode, url_or_pattern) where access_mode is one of:
-      - "fmrc": single FMRC aggregated OPeNDAP URL
-      - "ncei": NCEI THREDDS file pattern (requires enumeration)
-
-    FMRC is preferred for recent data (< 31 days).
-    NCEI is fallback for historical data (> 31 days).
+    Returns ("fmrc", url) for start times up to 6 days old, and ("archive", None) otherwise;
+    archive file URLs come from `_nowcast_file_urls`.
     """
     now = pd.Timestamp.now(tz="UTC").tz_localize(None)
     age_days = (now - target_dt).total_seconds() / 86400
-
-    # Prefer FMRC aggregation for recent data (< 7 days)
     if 0 <= age_days <= 6:
-        fmrc_url = (
-            "https://opendap.co-ops.nos.noaa.gov/thredds/dodsC/"
-            "NYOFS/fmrc/Aggregated_7_day_NYOFS_Fields_Forecast_best.ncd"
-        )
-        return ("fmrc", fmrc_url)
+        return ("fmrc", FMRC_URL)
+    return ("archive", None)
 
-    # Historical: AWS S3 or NCEI file-per-hour. Naming convention changed 2024-09-09
-    # and the archive migrated to AWS S3 starting 2024-01-01.
-    if target_dt >= pd.Timestamp("2024-01-01"):
-        pattern = (
-            "s3://noaa-nos-ofs-pds/nyofs/netcdf/"
-            "{yyyy}/{mm}/{dd}/nyofs.t{cc}z.{yyyymmdd}.fields.{type}{hhh:03d}.nc"
-        )
-        return ("aws_s3", pattern)
-    elif target_dt >= pd.Timestamp("2024-09-09"):
-        # Post-Sept 9 2024 naming: nyofs.tCCz.YYYYMMDD.fields.nHHH.nc
-        pattern = (
-            "https://www.ncei.noaa.gov/thredds/dodsC/model-nyofs-files/"
-            "{yyyy}/{mm}/{dd}/nyofs.t{cc}z.{yyyymmdd}.fields.{type}{hhh:03d}.nc"
-        )
+
+def _nowcast_cycle(hour_dt: pd.Timestamp) -> pd.Timestamp:
+    """Return the cycle whose nowcast file holds the record at `hour_dt` (a whole hour)."""
+    cycle_hour = next(c for c in NOWCAST_CYCLE_HOURS if c >= hour_dt.hour)
+    return hour_dt.replace(hour=cycle_hour, minute=0, second=0, microsecond=0)
+
+
+def _nowcast_cycles(start_dt: pd.Timestamp, end_dt: pd.Timestamp) -> list[pd.Timestamp]:
+    """Cycles whose nowcast files together cover every hour from `start_dt` to `end_dt`."""
+    hours = pd.date_range(start_dt.floor("h"), end_dt.ceil("h"), freq="h")
+    return sorted({_nowcast_cycle(h) for h in hours})
+
+
+def _nowcast_file_urls(cycle_dt: pd.Timestamp) -> list[str]:
+    """Candidate URLs for one cycle's coarse-grid nowcast file, in order of preference."""
+    day_dir, month_dir = cycle_dt.strftime("%Y/%m/%d"), cycle_dt.strftime("%Y/%m")
+    ymd, cc = cycle_dt.strftime("%Y%m%d"), cycle_dt.strftime("%H")
+    new_name = f"nyofs.t{cc}z.{ymd}.fields.nowcast.nc"
+
+    urls = []
+    if cycle_dt.normalize() >= AWS_PER_DAY_FROM:
+        urls.append(f"{AWS_BASE}/{day_dir}/{new_name}")
+    if cycle_dt.normalize() >= NCEI_NEW_NAMES_FROM:
+        urls.append(f"{NCEI_BASE}/{month_dir}/{new_name}")
     else:
-        # Legacy naming: nos.nyofs.fields.nHHH.YYYYMMDD.tCCz.nc
-        pattern = (
-            "https://www.ncei.noaa.gov/thredds/dodsC/model-nyofs-files/"
-            "{yyyy}/{mm}/nos.nyofs.fields.{type}{hhh:03d}.{yyyymmdd}.t{cc}z.nc"
-        )
-    return ("ncei", pattern)
+        old_name = f"nos.nyofs.fields.nowcast.{ymd}.t{cc}z.nc"
+        urls.append(f"{NCEI_BASE}/{month_dir}/{old_name}")
+    return urls
 
 
-def _enumerate_ncei_nyofs_files(
-    pattern: str, start_dt: pd.Timestamp, end_dt: pd.Timestamp
-) -> list[str]:
-    """
-    Enumerate NCEI NYOFS file URLs for a time range.
+def _open_archive_file(url: str) -> xr.Dataset:
+    """Open one NYOFS file. AWS copies are netCDF3 classic, which h5netcdf cannot read."""
+    if url.startswith("s3://"):
+        import fsspec  # type: ignore[import-untyped]
 
-    Picks the best 6-hourly cycle (00/06/12/18Z) and builds per-hour file URLs.
-    Spans cycle boundaries if duration_hours > remaining hours in first cycle.
-    """
-    # Find the most recent 6-hourly cycle before start_dt
-    cycle_hours = [0, 6, 12, 18]
-    cycle_before = None
-    for ch in reversed(cycle_hours):
-        test_dt = start_dt.replace(hour=ch, minute=0, second=0, microsecond=0)
-        if test_dt <= start_dt:
-            cycle_before = test_dt
-            break
+        with fsspec.open(url, "rb", anon=True) as f:
+            # scipy reads netCDF3 from a file object into memory; a nowcast file is about 6 MB.
+            return xr.open_dataset(f, engine="scipy").load()
+    return xr.open_dataset(_to_dap_url(url), engine="pydap")
 
-    if cycle_before is None:
-        # Fall back to previous day's last cycle
-        cycle_before = (start_dt - pd.Timedelta(days=1)).replace(
-            hour=18, minute=0, second=0, microsecond=0
-        )
 
-    # Enumerate files from cycle_before to end_dt
-    files = []
-    current_dt = cycle_before
-    current_cycle_dt = cycle_before
+def _open_first_available(urls: list[str]) -> Optional[xr.Dataset]:
+    for url in urls:
+        try:
+            return _open_archive_file(url)
+        except Exception as e:
+            logger.info(f"NYOFS file unavailable at {url}: {e}")
+    return None
 
-    while current_dt <= end_dt:
-        # Check if we've crossed into a new cycle (6 hours apart)
-        if (current_dt - current_cycle_dt).total_seconds() >= 6 * 3600:
-            current_cycle_dt = current_dt.replace(minute=0, second=0, microsecond=0)
-            # Snap to 6-hourly boundaries
-            cycle_hour = (current_cycle_dt.hour // 6) * 6
-            current_cycle_dt = current_cycle_dt.replace(hour=cycle_hour)
 
-        # Calculate file index (hour offset from cycle start)
-        hour_offset = int((current_dt - current_cycle_dt).total_seconds() / 3600) + 1
-        forecast_or_nowcast = "f" if current_dt > current_cycle_dt else "n"
-
-        # Format template variables
-        fmt_vars = {
-            "yyyy": current_cycle_dt.strftime("%Y"),
-            "mm": current_cycle_dt.strftime("%m"),
-            "dd": current_cycle_dt.strftime("%d"),
-            "yyyymmdd": current_cycle_dt.strftime("%Y%m%d"),
-            "cc": current_cycle_dt.strftime("%H"),
-            "hhh": hour_offset,
-            "type": forecast_or_nowcast,
-        }
-
-        # Build URL
-        url = pattern.format(**fmt_vars)
-        files.append(url)
-
-        current_dt += pd.Timedelta(hours=1)
-
-    return files
+def _round_to_hour(ds: xr.Dataset, time_var: str) -> xr.Dataset:
+    """Snap record times to whole hours; NYOFS stores them with up to 15 s of jitter."""
+    times = pd.DatetimeIndex(ds[time_var].values).round("h")
+    return ds.assign_coords({time_var: times})
 
 
 def _open_nyofs_dataset(
     access_mode: str,
-    url_or_pattern: str,
+    url_or_pattern: Optional[str],
     target_dt: pd.Timestamp,
     end_dt: Optional[pd.Timestamp] = None,
 ) -> Optional[xr.Dataset]:
     """
-    Open NYOFS dataset via OPeNDAP (FMRC or NCEI).
+    Open NYOFS data covering [target_dt, end_dt].
 
     Args:
-        access_mode: "fmrc" or "ncei"
-        url_or_pattern: Full URL (fmrc) or pattern (ncei)
+        access_mode: "fmrc" or "archive"
+        url_or_pattern: FMRC URL (fmrc); unused for archive
         target_dt: Start datetime for slicing
-        end_dt: End datetime (required for ncei, optional for fmrc)
+        end_dt: End datetime (defaults to one hour after target_dt)
 
     Returns:
-        xr.Dataset or None if fetch fails
+        xr.Dataset or None if fetch fails. Archive reads return None unless every nowcast file
+        in the window is found, so a gap falls back to the next donor rather than shortening
+        the store.
     """
+    if end_dt is None:
+        end_dt = target_dt + pd.Timedelta(hours=1)
     try:
         if access_mode == "fmrc":
             logger.info(f"Opening FMRC aggregation: {url_or_pattern}")
-            dap_url = _to_dap_url(url_or_pattern)
-            ds = xr.open_dataset(dap_url, engine="pydap")
+            assert url_or_pattern is not None
+            ds = xr.open_dataset(_to_dap_url(url_or_pattern), engine="pydap")
 
-            # Determine time variable name
             time_var = "time" if "time" in ds.coords else "ocean_time"
 
             # FMRC aggregations can have non-monotonic time indices; sort before slicing
-            ds = ds.sortby(time_var)
+            ds = _round_to_hour(ds.sortby(time_var), time_var)
 
-            # Slice to requested time range
-            if end_dt is None:
-                ds_t = ds.sel({time_var: target_dt}, method="nearest")
-            else:
-                ds_t = ds.sel({time_var: slice(target_dt, end_dt)})
-                if ds_t.sizes[time_var] == 0:
-                    ds_t = ds.sel({time_var: target_dt}, method="nearest").expand_dims(
-                        time_var
-                    )
-                    logger.warning("Exact time range empty, fell back to nearest.")
-
+            ds_t = ds.sel({time_var: slice(target_dt, end_dt)})
+            if ds_t.sizes[time_var] == 0:
+                ds_t = ds.sel({time_var: target_dt}, method="nearest").expand_dims(
+                    time_var
+                )
+                logger.warning("Exact time range empty, fell back to nearest.")
             return ds_t
 
-        elif access_mode in ("ncei", "aws_s3"):
-            mode_name = "AWS S3" if access_mode == "aws_s3" else "NCEI"
-            logger.info(
-                f"Enumerating NYOFS {mode_name} files from {target_dt} to {end_dt}"
-            )
-            if end_dt is None:
-                end_dt = target_dt + pd.Timedelta(hours=1)
-
-            files = _enumerate_ncei_nyofs_files(url_or_pattern, target_dt, end_dt)
-            logger.info(f"Opening {len(files)} NYOFS {mode_name} files...")
-
-            if access_mode == "aws_s3":
-                try:
-                    logger.info("Using xarray.open_mfdataset for parallel S3 access...")
-                    ds_t = xr.open_mfdataset(
-                        files,
-                        engine="h5netcdf",
-                        parallel=True,
-                        storage_options={"anon": True},
-                        data_vars="minimal",
-                        coords="minimal",
-                        compat="override",
-                    )
-                    return ds_t
-                except Exception as e:
-                    logger.error(
-                        f"Failed to open/concat NYOFS S3 files via mfdataset: {e}"
-                    )
-                    return None
-            else:
-                import concurrent.futures
-
-                datasets: list[Optional[xr.Dataset]] = [None] * len(files)
-                fail_counts = [0]
-
-                def _fetch_file(args):
-                    i, f = args
-                    if fail_counts[0] >= 3:
-                        return i, None
-                    try:
-                        if i % 10 == 0 or i == 1 or i == len(files):
-                            logger.info(
-                                f"[{i}/{len(files)}] Fetching/Opening NYOFS {mode_name} file: {f.split('/')[-1] if 's3' in f else f}"
-                            )
-                        ds_file = xr.open_dataset(_to_dap_url(f), engine="pydap")
-                        return i, ds_file
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to open NYOFS {mode_name} file {f}: {e}"
-                        )
-                        fail_counts[0] += 1
-                        return i, None
-
-                max_workers = settings.max_workers()
-                with concurrent.futures.ThreadPoolExecutor(
-                    max_workers=max_workers
-                ) as executor:
-                    for i, ds_file in executor.map(_fetch_file, enumerate(files, 1)):
-                        if ds_file is not None:
-                            datasets[i - 1] = ds_file
-
-                opened = [ds for ds in datasets if ds is not None]
-
-                if not opened:
-                    logger.error(f"No NYOFS {mode_name} files could be opened.")
-                    return None
-
-                # Concatenate along time dimension
-                return xr.concat(opened, dim="time", join="override")
-
-        else:
+        if access_mode != "archive":
             logger.error(f"Unknown access_mode: {access_mode}")
             return None
+
+        cycles = _nowcast_cycles(target_dt, end_dt)
+        logger.info(
+            f"Opening {len(cycles)} NYOFS nowcast files for {target_dt} to {end_dt}"
+        )
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=settings.max_workers()
+        ) as executor:
+            opened = list(
+                executor.map(
+                    lambda c: _open_first_available(_nowcast_file_urls(c)), cycles
+                )
+            )
+
+        missing = [c for c, ds in zip(cycles, opened) if ds is None]
+        if missing:
+            logger.error(
+                f"NYOFS nowcast files missing for cycles {[str(c) for c in missing]}"
+            )
+            return None
+
+        datasets = [ds for ds in opened if ds is not None]
+        ds = xr.concat(
+            datasets,
+            dim="time",
+            data_vars="minimal",
+            coords="minimal",
+            compat="override",
+            join="override",
+        )
+        ds = _round_to_hour(ds, "time")
+        return ds.sel(time=slice(target_dt.floor("h"), end_dt.ceil("h")))
 
     except Exception as e:
         logger.error(f"Failed to open NYOFS dataset ({access_mode}): {e}")
@@ -297,32 +242,6 @@ def _resolve_var(ds: xr.Dataset, role: str) -> str:
     )
 
 
-def _c_grid_to_rho(
-    u_raw: np.ndarray,
-    v_raw: np.ndarray,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Interpolate Arakawa C-grid u,v face values to rho-points by averaging
-    adjacent pairs.  Works on already-subset arrays of any leading shape:
-
-        u_rho[..., j, i] = 0.5 * (u[..., j, i] + u[..., j, i+1])
-        v_rho[..., j, i] = 0.5 * (v[..., j, i] + v[..., j+1, i])
-
-    The boundary column/row is filled by extrapolation (copy-edge) so the
-    output shape always matches the input shape.  This is valid for both
-    IC arrays (sigma, eta, xi) and OBC arrays (time, sigma, eta, xi).
-    """
-    u_rho = np.empty_like(u_raw)
-    u_rho[..., :-1] = 0.5 * (u_raw[..., :-1] + u_raw[..., 1:])
-    u_rho[..., -1] = u_raw[..., -1]  # boundary: copy edge
-
-    v_rho = np.empty_like(v_raw)
-    v_rho[..., :-1, :] = 0.5 * (v_raw[..., :-1, :] + v_raw[..., 1:, :])
-    v_rho[..., -1, :] = v_raw[..., -1, :]  # boundary: copy edge
-
-    return u_rho, v_rho
-
-
 def fetch_nyofs_boundary_conditions(
     start_date: str, duration_hours: int, bbox: list[float]
 ) -> Optional[xr.Dataset]:
@@ -330,6 +249,8 @@ def fetch_nyofs_boundary_conditions(
     Fetch 4D Ocean State (u, v) from NOAA NYOFS over a time range for OBC.
 
     Output dimensions: (time, depth, eta, xi) matching the standard OBC contract.
+    NYOFS u and v are earth-referenced (eastward, northward) and co-located with lon/lat, so
+    they are passed through without any face-to-centre averaging.
 
     Args:
         start_date: ISO format datetime string
@@ -351,96 +272,83 @@ def fetch_nyofs_boundary_conditions(
 
     end_dt = target_dt + pd.Timedelta(hours=duration_hours)
 
-    access_mode, url_or_pattern = _get_nyofs_url(target_dt)
+    access_mode, url = _get_nyofs_url(target_dt)
     logger.info(
         f"Attempting to fetch NYOFS OBC ({duration_hours}h) from {access_mode.upper()}"
     )
 
-    ds_t = _open_nyofs_dataset(access_mode, url_or_pattern, target_dt, end_dt)
+    ds_t = _open_nyofs_dataset(access_mode, url, target_dt, end_dt)
     if ds_t is None:
         return None
 
     try:
-        # Spatial subsetting
-        lon_var = "lon"
-        lat_var = "lat"
+        u_var = _resolve_var(ds_t, "u")
+        v_var = _resolve_var(ds_t, "v")
+        time_var = "time" if "time" in ds_t.coords else "ocean_time"
 
-        mask = (
-            (ds_t[lon_var] >= min_lon)
-            & (ds_t[lon_var] <= max_lon)
-            & (ds_t[lat_var] >= min_lat)
-            & (ds_t[lat_var] <= max_lat)
-            & (ds_t.get("mask", 1) == 1)
+        all_dims = list(ds_t[u_var].dims)
+        sigma_dim = next(
+            (d for d in ("sigma", "s_rho", "depth", "siglay") if d in all_dims), None
         )
-
-        ds_sub = ds_t.where(mask, drop=True)
-
-        # Check if the bounding box yielded zero valid water points
-        if any(size == 0 for size in ds_sub.sizes.values()):
-            logger.warning(
-                "No valid NYOFS ocean points found in bounding box (size is 0)."
-            )
-            return None
-
-        logger.info("Executing OPeNDAP download for NYOFS OBC subset...")
-        ds_sub = ds_sub.compute()
-
-        # Resolve actual variable names
-        u_var = _resolve_var(ds_sub, "u")
-        v_var = _resolve_var(ds_sub, "v")
-        logger.info(f"NYOFS OBC variable mapping: u={u_var}, v={v_var}")
-
-        # Detect dimensions
-        all_dims = list(ds_sub[u_var].dims)
-        time_var = "time" if "time" in ds_sub.coords else "ocean_time"
-        sigma_dim = None
-        for candidate in ["sigma", "s_rho", "depth", "siglay"]:
-            if candidate in all_dims:
-                sigma_dim = candidate
-                break
-
         if sigma_dim is None:
             logger.error(
                 f"No recognized sigma dimension in NYOFS OBC. Dims: {all_dims}"
             )
             return None
+        spatial_dims = [d for d in all_dims if d not in (time_var, sigma_dim)]
+        if len(spatial_dims) != 2:
+            logger.error(f"Unexpected spatial dims in NYOFS OBC: {spatial_dims}")
+            return None
+        eta_dim, xi_dim = spatial_dims
 
-        # Spatial dimensions
-        spatial_dims = [d for d in all_dims if d != time_var and d != sigma_dim]
-        if len(spatial_dims) < 2:
-            logger.error(f"Unexpected spatial dims after subset: {spatial_dims}")
+        lon = np.asarray(ds_t["lon"].values)
+        lat = np.asarray(ds_t["lat"].values)
+        wet = (
+            np.asarray(ds_t["mask"].values) == 1
+            if "mask" in ds_t
+            else np.ones_like(lon, dtype=bool)
+        )
+        inside = (
+            (lon >= min_lon)
+            & (lon <= max_lon)
+            & (lat >= min_lat)
+            & (lat <= max_lat)
+            & wet
+        )
+        rows, cols = np.nonzero(inside)
+        if rows.size == 0:
+            logger.warning("No valid NYOFS ocean points found in bounding box.")
             return None
 
-        eta_dim = spatial_dims[0]  # noqa: F841 - kept for readability / debug logging
-        xi_dim = spatial_dims[1]  # noqa: F841
+        # The bounding rectangle of the wet cells inside the box; cells outside the box or on
+        # land within it are NaN.
+        window = {
+            eta_dim: slice(int(rows.min()), int(rows.max()) + 1),
+            xi_dim: slice(int(cols.min()), int(cols.max()) + 1),
+        }
+        keep = inside[window[eta_dim], window[xi_dim]]
 
-        # C-grid interpolation: vectorized over all leading dims (time, sigma, ...)
-        u_raw = ds_sub[u_var].values
-        v_raw = ds_sub[v_var].values
-        u_rho, v_rho = _c_grid_to_rho(
-            u_raw.astype(np.float32), v_raw.astype(np.float32)
-        )
+        logger.info("Reading NYOFS OBC subset...")
+        ds_sub = ds_t[[u_var, v_var]].isel(window).compute()
+        if ds_sub.indexes[time_var].has_duplicates:
+            # The FMRC "best" series repeats some hours (times differing only in jitter), one
+            # copy of which can be all fill; keep the first non-missing value of each hour.
+            ds_sub = ds_sub.groupby(time_var).first()
+        u = np.where(keep, ds_sub[u_var].values, np.nan).astype(np.float32)
+        v = np.where(keep, ds_sub[v_var].values, np.nan).astype(np.float32)
 
-        n_sigma = u_rho.shape[1]
-        n_eta = u_rho.shape[2]
-        n_xi = u_rho.shape[3]
-
-        # Map sigma to pseudo-depth
-        n_depth = n_sigma
-        depths = np.linspace(-50, 0, n_depth).astype(np.float32)
-
-        # Get time coordinates
+        n_sigma, n_eta, n_xi = u.shape[1], u.shape[2], u.shape[3]
         out_times = ds_sub[time_var].values
 
-        # Build output dataset
         ds_out = xr.Dataset(
             data_vars={
-                "u": (("time", "depth", "eta", "xi"), u_rho),
-                "v": (("time", "depth", "eta", "xi"), v_rho),
+                "u": (("time", "depth", "eta", "xi"), u),
+                "v": (("time", "depth", "eta", "xi"), v),
             },
             coords={
                 "time": out_times,
-                "depth": depths,
+                # Placeholder for the sigma levels (legacy layout), not true depths.
+                "depth": np.linspace(-50, 0, n_sigma).astype(np.float32),
                 "eta": np.arange(n_eta, dtype=np.float32),
                 "xi": np.arange(n_xi, dtype=np.float32),
             },

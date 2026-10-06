@@ -1,26 +1,39 @@
 """
 DBOFS (NOAA Delaware Bay Operational Forecast System) fetcher.
 
-Provides Initial Conditions (IC) and Open Boundary Conditions (OBC) from a
-ROMS structured grid via OPeNDAP. Covers Delaware Bay and the adjacent
-Mid-Atlantic Bight continental shelf, including offshore NJ south of 40°N.
+Provides Open Boundary Conditions (OBC) from a ROMS structured grid. Covers Delaware Bay and
+the adjacent Mid-Atlantic Bight continental shelf, including offshore NJ south of 40°N. Recent
+data comes from the CO-OPS FMRC aggregation; older data is the chain of hourly nowcast files,
+from AWS S3 (per-day layout, from 2024-11-19) or NCEI THREDDS.
 
-Domain: [-76.5, 37.5, -73.0, 40.0] - domain area 8.75°², finer than the
-NECOFS/MARACOOS 132°² footprint, so DBOFS wins the dispatcher ranking for
-any bbox fully contained in this region.
+Domain: [-75.875, 37.810, -73.264, 40.206], finer than the NECOFS 132°² footprint, so DBOFS
+wins the dispatcher ranking for any bbox fully contained in this region.
 """
 
-import numpy as np
-import xarray as xr
-import pandas as pd
+import concurrent.futures
 import logging
 from typing import Optional, Tuple
+
+import numpy as np
+import pandas as pd
+import xarray as xr
+
 from forcingkit import settings
 
 logger = logging.getLogger(__name__)
 
-# Abort NCEI file enumeration after this many consecutive open failures.
-_NCEI_CONSECUTIVE_FAIL_LIMIT = 3
+FMRC_URL = (
+    "https://opendap.co-ops.nos.noaa.gov/thredds/dodsC/"
+    "DBOFS/fmrc/Aggregated_7_day_DBOFS_Fields_Forecast_best.ncd"
+)
+NCEI_BASE = "https://www.ncei.noaa.gov/thredds/dodsC/model-dbofs-files"
+AWS_BASE = "s3://noaa-nos-ofs-pds/dbofs/netcdf"
+
+# AWS holds one directory per day from 2024-11-19 (that day has only the 18 UTC cycle). Before
+# that, AWS has flat month directories with gaps, so those dates are read from NCEI instead.
+AWS_PER_DAY_FROM = pd.Timestamp("2024-11-19")
+# NCEI file names changed with the 2024-09-09 cycles.
+NCEI_NEW_NAMES_FROM = pd.Timestamp("2024-09-09")
 
 
 def get_metadata() -> dict:
@@ -62,192 +75,140 @@ def _to_dap_url(url: str) -> str:
     return url.replace("https://", "dap2://").replace("http://", "dap2://")
 
 
-def _get_dbofs_url(target_dt: pd.Timestamp) -> Tuple[str, str]:
+def _get_dbofs_url(target_dt: pd.Timestamp) -> Tuple[str, Optional[str]]:
     """
-    Resolve DBOFS data access URL and mode.
+    Resolve the DBOFS access mode for a start time.
 
-    Returns (access_mode, url_or_pattern) where access_mode is one of:
-      - "fmrc": single FMRC aggregated OPeNDAP URL (recent data, < 31 days)
-      - "ncei": NCEI THREDDS file pattern (historical data, > 31 days)
+    Returns ("fmrc", url) for start times up to 6 days old, and ("archive", None) otherwise;
+    archive file URLs come from `_nowcast_file_urls`.
     """
     now = pd.Timestamp.now(tz="UTC").tz_localize(None)
     age_days = (now - target_dt).total_seconds() / 86400
-
     if 0 <= age_days <= 6:
-        fmrc_url = (
-            "https://opendap.co-ops.nos.noaa.gov/thredds/dodsC/"
-            "DBOFS/fmrc/Aggregated_7_day_DBOFS_Fields_Forecast_best.ncd"
-        )
-        return ("fmrc", fmrc_url)
+        return ("fmrc", FMRC_URL)
+    return ("archive", None)
 
-    # Historical: AWS S3 or NCEI file-per-hour. Naming convention changed 2024-09-09
-    # and the archive migrated to AWS S3 starting 2024-01-01.
-    if target_dt >= pd.Timestamp("2024-01-01"):
-        pattern = (
-            "s3://noaa-nos-ofs-pds/dbofs/netcdf/"
-            "{yyyy}/{mm}/{dd}/dbofs.t{cc}z.{yyyymmdd}.fields.{type}{hhh:03d}.nc"
-        )
-        return ("aws_s3", pattern)
+
+def _nowcast_file(hour_dt: pd.Timestamp) -> Tuple[pd.Timestamp, int]:
+    """
+    Return (cycle, n) such that nowcast file `n00{n}` of `cycle` holds the record at `hour_dt`.
+
+    Cycles run at 00, 06, 12 and 18 UTC, and file n001 to n006 of cycle tCCz hold hours CC-5
+    to CC, so 00 UTC is n006 of t00z and 01 UTC is n001 of t06z.
+    """
+    hour_dt = hour_dt.floor("h")
+    cycle = hour_dt.ceil("6h")
+    n = 6 - int((cycle - hour_dt) / pd.Timedelta(hours=1))
+    return cycle, n
+
+
+def _nowcast_file_urls(hour_dt: pd.Timestamp) -> list[str]:
+    """Candidate URLs for the nowcast file holding `hour_dt`, in order of preference."""
+    cycle, n = _nowcast_file(hour_dt)
+    day_dir, month_dir = cycle.strftime("%Y/%m/%d"), cycle.strftime("%Y/%m")
+    ymd, cc = cycle.strftime("%Y%m%d"), cycle.strftime("%H")
+    new_name = f"dbofs.t{cc}z.{ymd}.fields.n{n:03d}.nc"
+
+    urls = []
+    if cycle.normalize() >= AWS_PER_DAY_FROM:
+        urls.append(f"{AWS_BASE}/{day_dir}/{new_name}")
+    if cycle.normalize() >= NCEI_NEW_NAMES_FROM:
+        urls.append(f"{NCEI_BASE}/{month_dir}/{new_name}")
     else:
-        pattern = (
-            "https://www.ncei.noaa.gov/thredds/dodsC/model-dbofs-files/"
-            "{yyyy}/{mm}/nos.dbofs.fields.{type}{hhh:03d}.{yyyymmdd}.t{cc}z.nc"
+        old_name = f"nos.dbofs.fields.n{n:03d}.{ymd}.t{cc}z.nc"
+        urls.append(f"{NCEI_BASE}/{month_dir}/{old_name}")
+    return urls
+
+
+def _open_archive_file(url: str) -> xr.Dataset:
+    """Open one DBOFS file lazily, so only the subset the request needs is read."""
+    if url.startswith("s3://"):
+        import fsspec  # type: ignore[import-untyped]
+
+        # The file object must stay open while the dataset is lazy; xarray closes it with the
+        # dataset.
+        return xr.open_dataset(
+            fsspec.open(url, "rb", anon=True).open(), engine="h5netcdf"
         )
-        return ("ncei", pattern)
+    return xr.open_dataset(_to_dap_url(url), engine="pydap")
 
 
-def _enumerate_ncei_dbofs_files(
-    pattern: str, start_dt: pd.Timestamp, end_dt: pd.Timestamp
-) -> list[str]:
-    """
-    Enumerate NCEI DBOFS file URLs for a time range.
-
-    Picks the best 6-hourly cycle (00/06/12/18Z) and builds per-hour file URLs.
-    """
-    cycle_hours = [0, 6, 12, 18]
-    cycle_before = None
-    for ch in reversed(cycle_hours):
-        test_dt = start_dt.replace(hour=ch, minute=0, second=0, microsecond=0)
-        if test_dt <= start_dt:
-            cycle_before = test_dt
-            break
-
-    if cycle_before is None:
-        cycle_before = (start_dt - pd.Timedelta(days=1)).replace(
-            hour=18, minute=0, second=0, microsecond=0
-        )
-
-    files = []
-    current_dt = cycle_before
-    current_cycle_dt = cycle_before
-
-    while current_dt <= end_dt:
-        if (current_dt - current_cycle_dt).total_seconds() >= 6 * 3600:
-            current_cycle_dt = current_dt.replace(minute=0, second=0, microsecond=0)
-            cycle_hour = (current_cycle_dt.hour // 6) * 6
-            current_cycle_dt = current_cycle_dt.replace(hour=cycle_hour)
-
-        hour_offset = int((current_dt - current_cycle_dt).total_seconds() / 3600) + 1
-        forecast_or_nowcast = "f" if current_dt > current_cycle_dt else "n"
-
-        fmt_vars = {
-            "yyyy": current_cycle_dt.strftime("%Y"),
-            "mm": current_cycle_dt.strftime("%m"),
-            "dd": current_cycle_dt.strftime("%d"),
-            "yyyymmdd": current_cycle_dt.strftime("%Y%m%d"),
-            "cc": current_cycle_dt.strftime("%H"),
-            "hhh": hour_offset,
-            "type": forecast_or_nowcast,
-        }
-
-        files.append(pattern.format(**fmt_vars))
-        current_dt += pd.Timedelta(hours=1)
-
-    return files
+def _open_first_available(urls: list[str]) -> Optional[xr.Dataset]:
+    for url in urls:
+        try:
+            return _open_archive_file(url)
+        except Exception as e:
+            logger.info(f"DBOFS file unavailable at {url}: {e}")
+    return None
 
 
 def _open_dbofs_dataset(
     access_mode: str,
-    url_or_pattern: str,
+    url_or_pattern: Optional[str],
     target_dt: pd.Timestamp,
     end_dt: Optional[pd.Timestamp] = None,
 ) -> Optional[xr.Dataset]:
-    """Open DBOFS dataset via OPeNDAP (FMRC or NCEI)."""
+    """
+    Open DBOFS data covering [target_dt, end_dt] (FMRC or archive).
+
+    Archive reads return None unless every hourly nowcast file in the window is found, so a
+    gap falls back to the next donor rather than shortening the store.
+    """
+    if end_dt is None:
+        end_dt = target_dt + pd.Timedelta(hours=1)
     try:
         if access_mode == "fmrc":
             logger.info(f"Opening DBOFS FMRC aggregation: {url_or_pattern}")
-            dap_url = _to_dap_url(url_or_pattern)
-            ds = xr.open_dataset(dap_url, engine="pydap")
+            assert url_or_pattern is not None
+            ds = xr.open_dataset(_to_dap_url(url_or_pattern), engine="pydap")
 
             time_var = "time" if "time" in ds.coords else "ocean_time"
             ds = ds.sortby(time_var)
 
-            if end_dt is None:
-                return ds.sel({time_var: target_dt}, method="nearest")
-            else:
-                ds_t = ds.sel({time_var: slice(target_dt, end_dt)})
-                if ds_t.sizes[time_var] == 0:
-                    logger.warning(
-                        "DBOFS FMRC: exact time range empty, fell back to nearest."
-                    )
-                    return ds.sel({time_var: target_dt}, method="nearest").expand_dims(
-                        time_var
-                    )
-                return ds_t
+            ds_t = ds.sel({time_var: slice(target_dt, end_dt)})
+            if ds_t.sizes[time_var] == 0:
+                logger.warning(
+                    "DBOFS FMRC: exact time range empty, fell back to nearest."
+                )
+                return ds.sel({time_var: target_dt}, method="nearest").expand_dims(
+                    time_var
+                )
+            return ds_t
 
-        elif access_mode in ("ncei", "aws_s3"):
-            mode_name = "AWS S3" if access_mode == "aws_s3" else "NCEI"
-            logger.info(
-                f"Enumerating DBOFS {mode_name} files from {target_dt} to {end_dt}"
-            )
-            if end_dt is None:
-                end_dt = target_dt + pd.Timedelta(hours=1)
-
-            files = _enumerate_ncei_dbofs_files(url_or_pattern, target_dt, end_dt)
-            logger.info(f"Opening {len(files)} DBOFS {mode_name} files...")
-
-            if access_mode == "aws_s3":
-                try:
-                    logger.info("Using xarray.open_mfdataset for parallel S3 access...")
-                    ds_t = xr.open_mfdataset(
-                        files,
-                        engine="h5netcdf",
-                        parallel=True,
-                        storage_options={"anon": True},
-                        data_vars="minimal",
-                        coords="minimal",
-                        compat="override",
-                    )
-                    return ds_t
-                except Exception as e:
-                    logger.error(
-                        f"Failed to open/concat DBOFS S3 files via mfdataset: {e}"
-                    )
-                    return None
-            else:
-                import concurrent.futures
-
-                datasets: list[Optional[xr.Dataset]] = [None] * len(files)
-                fail_counts = [0]
-
-                def _fetch_file(args):
-                    i, f = args
-                    # Optional short-circuit if another thread hit the failure limit
-                    if fail_counts[0] >= _NCEI_CONSECUTIVE_FAIL_LIMIT:
-                        return i, None
-                    try:
-                        if i % 10 == 0 or i == 1 or i == len(files):
-                            logger.info(
-                                f"[{i}/{len(files)}] Fetching/Opening DBOFS {mode_name} file: {f.split('/')[-1] if 's3' in f else f}"
-                            )
-                        ds_file = xr.open_dataset(_to_dap_url(f), engine="pydap")
-                        return i, ds_file
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to open DBOFS {mode_name} file {f}: {e}"
-                        )
-                        fail_counts[0] += 1
-                        return i, None
-
-                max_workers = settings.max_workers()
-                with concurrent.futures.ThreadPoolExecutor(
-                    max_workers=max_workers
-                ) as executor:
-                    for i, ds_file in executor.map(_fetch_file, enumerate(files, 1)):
-                        datasets[i - 1] = ds_file
-
-                # Filter out failures
-                opened = [ds for ds in datasets if ds is not None]
-
-                if not opened:
-                    logger.error(f"No DBOFS {mode_name} files could be opened.")
-                    return None
-
-                return xr.concat(opened, dim="time", join="override")
-
-        else:
+        if access_mode != "archive":
             logger.error(f"Unknown access_mode: {access_mode}")
             return None
+
+        hours = list(pd.date_range(target_dt.floor("h"), end_dt.ceil("h"), freq="h"))
+        logger.info(
+            f"Opening {len(hours)} DBOFS nowcast files for {target_dt} to {end_dt}"
+        )
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=settings.max_workers()
+        ) as executor:
+            opened = list(
+                executor.map(
+                    lambda h: _open_first_available(_nowcast_file_urls(h)), hours
+                )
+            )
+
+        missing = [h for h, ds in zip(hours, opened) if ds is None]
+        if missing:
+            logger.error(
+                f"DBOFS nowcast files missing for hours {[str(h) for h in missing]}"
+            )
+            return None
+
+        datasets = [ds for ds in opened if ds is not None]
+        time_var = "ocean_time" if "ocean_time" in datasets[0].dims else "time"
+        return xr.concat(
+            datasets,
+            dim=time_var,
+            data_vars="minimal",
+            coords="minimal",
+            compat="override",
+            join="override",
+        )
 
     except Exception as e:
         logger.error(f"Failed to open DBOFS dataset ({access_mode}): {e}")
@@ -272,6 +233,17 @@ def _resolve_var(ds: xr.Dataset, role: str) -> str:
         f"No variable found for role '{role}'. "
         f"Tried: {_VAR_CANDIDATES[role]}. Available: {list(ds.data_vars)}"
     )
+
+
+# ROMS writes missing values as 1e37. The NCEI OPeNDAP path (pydap) does not always decode
+# them, so treat anything this large as missing.
+_FILL_THRESHOLD = 1e30
+
+
+def _fill_to_nan(values: np.ndarray) -> np.ndarray:
+    """Return `values` as Float32 with ROMS fill values replaced by NaN."""
+    out = np.asarray(values, dtype=np.float32)
+    return np.where(np.abs(out) < _FILL_THRESHOLD, out, np.float32(np.nan))
 
 
 def _c_grid_to_rho(
@@ -407,8 +379,8 @@ def fetch_dbofs_boundary_conditions(
             return None
 
         u_rho, v_rho = _c_grid_to_rho(
-            ds_sub[u_var].values.astype(np.float32),
-            ds_sub[v_var].values.astype(np.float32),
+            _fill_to_nan(ds_sub[u_var].values),
+            _fill_to_nan(ds_sub[v_var].values),
         )
 
         n_sigma = u_rho.shape[1]

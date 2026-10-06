@@ -111,6 +111,23 @@ def predict_obc_donor(bbox: list[float]) -> dict:
     return {}
 
 
+def delivered_obc_donor(zarr_path: str) -> Optional[str]:
+    """Id of the donor that wrote the OBC store at `zarr_path`, or None if unreadable.
+
+    Stores record the delivering fetcher module in their `source` attribute (for example
+    `forcingkit.fetchers.necofs`); this can differ from `predict_obc_donor` after a fallback.
+    """
+    import zarr
+
+    try:
+        source = zarr.open_group(zarr_path, mode="r", zarr_format=2).attrs.get("source")
+    except Exception:
+        return None
+    if not isinstance(source, str) or not source:
+        return None
+    return source.rsplit(".", 1)[-1]
+
+
 def dispatch_obc_request(
     start_date: str,
     duration_hours: int,

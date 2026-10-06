@@ -346,7 +346,11 @@ def generate_obc(request: OBCRequest) -> Dict[str, Any]:
         request.bbox.max_lon,
         request.bbox.max_lat,
     ]
-    from forcingkit.dispatcher import predict_obc_donor, dispatch_obc_request
+    from forcingkit.dispatcher import (
+        delivered_obc_donor,
+        dispatch_obc_request,
+        predict_obc_donor,
+    )
 
     meta = predict_obc_donor(bbox_list)
     donor_id = meta.get("id", "unknown")
@@ -370,7 +374,8 @@ def generate_obc(request: OBCRequest) -> Dict[str, Any]:
             "zarr_id": zarr_id,
             "zarr_path": zarr_path,
             "download_url": f"/api/v1/obc/download/{zarr_id}",
-            "donor": donor_id,
+            "donor": delivered_obc_donor(zarr_path) or donor_id,
+            "predicted_donor": donor_id,
         }
 
     try:
@@ -392,7 +397,9 @@ def generate_obc(request: OBCRequest) -> Dict[str, Any]:
             "zarr_id": zarr_id,
             "zarr_path": final_path,
             "download_url": f"/api/v1/obc/download/{zarr_id}",
-            "donor": donor_id,
+            # The donor that delivered, which differs from the predicted one after a fallback.
+            "donor": delivered_obc_donor(final_path) or donor_id,
+            "predicted_donor": donor_id,
         }
     except Exception as e:
         logger.error(f"OBC generation failed: {e}")

@@ -4,7 +4,7 @@ import pytest
 import numpy as np
 import pandas as pd
 import xarray as xr
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from forcingkit.fetchers import dbofs
 
@@ -63,7 +63,7 @@ class TestDBOFSMetadata:
 
 
 class TestURLResolution:
-    """Test URL resolution logic for FMRC vs NCEI."""
+    """Access mode: FMRC for the past 6 days, the nowcast archive before that."""
 
     def test_get_url_recent_returns_fmrc(self):
         target_dt = pd.Timestamp.now(tz="UTC").tz_localize(None) - pd.Timedelta(days=5)
@@ -73,52 +73,128 @@ class TestURLResolution:
         assert "Aggregated_7_day_DBOFS_Fields_Forecast_best" in url
         assert "opendap.co-ops.nos.noaa.gov" in url
 
-    def test_get_url_historical_returns_aws(self):
-        target_dt = pd.Timestamp("2024-01-15", tz="UTC").tz_localize(None)
-        mode, url = dbofs._get_dbofs_url(target_dt)
-
-        assert mode == "aws_s3"
-
-    def test_get_url_post_sept_2024_naming(self):
-        target_dt = pd.Timestamp("2024-10-01", tz="UTC").tz_localize(None)
-        mode, url = dbofs._get_dbofs_url(target_dt)
-
-        assert mode == "aws_s3"
-
-    def test_get_url_pre_sept_2024_naming(self):
-        target_dt = pd.Timestamp("2024-08-01", tz="UTC").tz_localize(None)
-        mode, url = dbofs._get_dbofs_url(target_dt)
-
-        assert mode == "aws_s3"
+    @pytest.mark.parametrize("date", ["2026-09-15", "2024-06-15", "2023-12-15"])
+    def test_older_returns_archive(self, date):
+        mode, url = dbofs._get_dbofs_url(pd.Timestamp(date))
+        assert mode == "archive"
+        assert url is None
 
 
-class TestEnumerateNCEIFiles:
-    """Test NCEI file enumeration."""
+class TestNowcastFiles:
+    """Hour-to-file mapping: file n001 to n006 of cycle tCCz hold hours CC-5 to CC."""
 
-    def test_enumerate_single_hour(self):
-        pattern = (
-            "https://www.ncei.noaa.gov/thredds/dodsC/model-dbofs-files/"
-            "{yyyy}/{mm}/{dd}/dbofs.t{cc}z.{yyyymmdd}.fields.{type}{hhh:03d}.nc"
+    @pytest.mark.parametrize(
+        "hour, cycle, n",
+        [
+            ("2026-09-15 00:00", "2026-09-15 00:00", 6),
+            ("2026-09-15 01:00", "2026-09-15 06:00", 1),
+            ("2026-09-15 06:00", "2026-09-15 06:00", 6),
+            ("2026-09-15 07:30", "2026-09-15 12:00", 1),
+            ("2026-09-15 19:00", "2026-09-16 00:00", 1),
+            ("2026-09-15 23:00", "2026-09-16 00:00", 5),
+        ],
+    )
+    def test_nowcast_file(self, hour, cycle, n):
+        assert dbofs._nowcast_file(pd.Timestamp(hour)) == (pd.Timestamp(cycle), n)
+
+    def test_aws_per_day_then_ncei(self):
+        urls = dbofs._nowcast_file_urls(pd.Timestamp("2026-09-15 04:00"))
+        assert urls == [
+            "s3://noaa-nos-ofs-pds/dbofs/netcdf/2026/09/15/"
+            "dbofs.t06z.20260915.fields.n004.nc",
+            "https://www.ncei.noaa.gov/thredds/dodsC/model-dbofs-files/2026/09/"
+            "dbofs.t06z.20260915.fields.n004.nc",
+        ]
+
+    def test_hour_in_next_days_cycle_uses_that_days_directory(self):
+        urls = dbofs._nowcast_file_urls(pd.Timestamp("2026-09-30 21:00"))
+        assert urls[0] == (
+            "s3://noaa-nos-ofs-pds/dbofs/netcdf/2026/10/01/"
+            "dbofs.t00z.20261001.fields.n003.nc"
         )
-        start_dt = pd.Timestamp("2024-10-15 12:30:00")
-        end_dt = start_dt + pd.Timedelta(hours=1)
 
-        files = dbofs._enumerate_ncei_dbofs_files(pattern, start_dt, end_dt)
+    def test_before_aws_per_day_uses_ncei_only(self):
+        urls = dbofs._nowcast_file_urls(pd.Timestamp("2024-10-15 12:00"))
+        assert urls == [
+            "https://www.ncei.noaa.gov/thredds/dodsC/model-dbofs-files/2024/10/"
+            "dbofs.t12z.20241015.fields.n006.nc"
+        ]
 
-        assert len(files) >= 1
-        assert "2024" in files[0]
+    def test_ncei_new_names_from_2024_09_09(self):
+        urls = dbofs._nowcast_file_urls(pd.Timestamp("2024-09-09 01:00"))
+        assert urls == [
+            "https://www.ncei.noaa.gov/thredds/dodsC/model-dbofs-files/2024/09/"
+            "dbofs.t06z.20240909.fields.n001.nc"
+        ]
 
-    def test_enumerate_multiple_hours(self):
-        pattern = (
-            "https://www.ncei.noaa.gov/thredds/dodsC/model-dbofs-files/"
-            "{yyyy}/{mm}/{dd}/dbofs.t{cc}z.{yyyymmdd}.fields.{type}{hhh:03d}.nc"
+    def test_ncei_old_names_before_2024_09_09(self):
+        urls = dbofs._nowcast_file_urls(pd.Timestamp("2023-12-15 06:00"))
+        assert urls == [
+            "https://www.ncei.noaa.gov/thredds/dodsC/model-dbofs-files/2023/12/"
+            "nos.dbofs.fields.n006.20231215.t06z.nc"
+        ]
+
+
+def _hourly_file(hour: pd.Timestamp) -> xr.Dataset:
+    """A synthetic ROMS fields file holding one record at `hour`."""
+    return xr.Dataset(
+        data_vars={
+            "u": (("ocean_time", "s_rho", "eta_u", "xi_u"), np.ones((1, 2, 3, 3))),
+            "lon_rho": (("eta_rho", "xi_rho"), np.zeros((3, 4))),
+        },
+        coords={"ocean_time": [hour]},
+    )
+
+
+class TestOpenArchive:
+    """The archive path opens one file per hour and joins them along ocean_time."""
+
+    @patch("forcingkit.fetchers.dbofs._nowcast_file_urls", lambda h: [str(h)])
+    @patch("forcingkit.fetchers.dbofs._open_first_available")
+    def test_concatenates_along_ocean_time(self, mock_open):
+        mock_open.side_effect = lambda urls: _hourly_file(pd.Timestamp(urls[0]))
+        start, end = pd.Timestamp("2026-09-15 04:00"), pd.Timestamp("2026-09-15 07:00")
+
+        result = dbofs._open_dbofs_dataset("archive", None, start, end)
+
+        assert result is not None
+        assert result.u.dims == ("ocean_time", "s_rho", "eta_u", "xi_u")
+        assert list(pd.DatetimeIndex(result.ocean_time.values)) == list(
+            pd.date_range(start, end, freq="h")
         )
-        start_dt = pd.Timestamp("2024-10-15 06:00:00")
-        end_dt = start_dt + pd.Timedelta(hours=6)
+        assert result.lon_rho.dims == ("eta_rho", "xi_rho")
 
-        files = dbofs._enumerate_ncei_dbofs_files(pattern, start_dt, end_dt)
+    @patch("forcingkit.fetchers.dbofs._open_first_available")
+    def test_missing_hour_returns_none(self, mock_open):
+        mock_open.side_effect = [_hourly_file(pd.Timestamp("2026-09-15 04:00")), None]
+        result = dbofs._open_dbofs_dataset(
+            "archive",
+            None,
+            pd.Timestamp("2026-09-15 04:00"),
+            pd.Timestamp("2026-09-15 05:00"),
+        )
+        assert result is None
 
-        assert len(files) >= 6
+    @patch("forcingkit.fetchers.dbofs.xr.open_dataset")
+    @patch("fsspec.open")
+    def test_s3_uses_h5netcdf(self, mock_fsspec_open, mock_xr_open):
+        mock_fsspec_open.return_value = MagicMock()
+        dbofs._open_archive_file("s3://noaa-nos-ofs-pds/dbofs/netcdf/x.nc")
+        assert mock_xr_open.call_args.kwargs["engine"] == "h5netcdf"
+
+    @patch("forcingkit.fetchers.dbofs._open_archive_file")
+    def test_falls_back_to_ncei(self, mock_open):
+        ds = xr.Dataset()
+        mock_open.side_effect = [FileNotFoundError("not on AWS"), ds]
+        assert dbofs._open_first_available(["s3://a", "https://b"]) is ds
+
+
+class TestFillValues:
+    def test_roms_fill_becomes_nan(self):
+        out = dbofs._fill_to_nan(np.array([0.5, 1e37, -1e37, -0.2]))
+        assert out.dtype == np.float32
+        np.testing.assert_array_equal(np.isnan(out), [False, True, True, False])
+        assert out[0] == np.float32(0.5)
 
 
 class TestCGridInterpolation:
