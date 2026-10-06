@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.abspath("../../src"))
 project = "forcingkit"
 copyright = "2026, Long Horizon Observatory"
 author = "Daniel Fry"
-release = "0.1.0.post1"
+release = "0.2.0"
 
 extensions = [
     "sphinx.ext.autodoc",
