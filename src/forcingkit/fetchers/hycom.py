@@ -1,6 +1,7 @@
 import xarray as xr
 import pandas as pd
 import logging
+import time
 from dataclasses import dataclass
 from typing import Optional
 import numpy as np
@@ -8,6 +9,12 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 _TDS = "https://tds.hycom.org/thredds/dodsC"
+
+# tds.hycom.org stalls on some requests past the 120 s read timeout, and the same request usually
+# succeeds when repeated (2026-10-06). A window needs every one of its datasets, so each is tried
+# twice before the window is given up.
+_ATTEMPTS = 2
+_RETRY_DELAY_S = 30.0
 
 # HYCOM variable names and their canonical forcingkit names; nothing else is downloaded.
 _RENAME = {
@@ -204,97 +211,108 @@ def _fetch_hycom_data(
     dataset_url: str,
     is_ic: bool = False,
 ) -> Optional[xr.Dataset]:
+    """Read one dataset's subset, retrying after a failed request; None if it cannot be read."""
+    for attempt in range(1, _ATTEMPTS + 1):
+        try:
+            return _read_hycom_data(start_dt, end_dt, bbox, dataset_url, is_ic)
+        except Exception as e:
+            if attempt < _ATTEMPTS:
+                logger.warning(
+                    f"HYCOM read from {dataset_url} failed ({e}); retrying in "
+                    f"{_RETRY_DELAY_S:g} s (attempt {attempt} of {_ATTEMPTS})."
+                )
+                time.sleep(_RETRY_DELAY_S)
+            else:
+                logger.error(f"Failed to fetch from HYCOM ({dataset_url}): {e}")
+    return None
+
+
+def _read_hycom_data(
+    start_dt: pd.Timestamp,
+    end_dt: pd.Timestamp,
+    bbox: list[float],
+    dataset_url: str,
+    is_ic: bool,
+) -> Optional[xr.Dataset]:
+    """Read one dataset's subset. None if it has no data in the window; raises on errors."""
     min_lon, min_lat, max_lon, max_lat = bbox
 
     logger.info(f"Fetching HYCOM data from {dataset_url} for {start_dt} to {end_dt}")
 
-    try:
-        dap_url = dataset_url.replace("https://", "dap2://").replace(
-            "http://", "dap2://"
+    dap_url = dataset_url.replace("https://", "dap2://").replace("http://", "dap2://")
+    ds = xr.open_dataset(dap_url, engine="pydap", decode_times=False)
+
+    # HYCOM time axis is "hours since 2000-01-01 00:00:00"
+    epoch = pd.Timestamp("2000-01-01 00:00:00")
+    start_hours = (start_dt - epoch).total_seconds() / 3600.0
+    end_hours = (end_dt - epoch).total_seconds() / 3600.0
+
+    time_var = "time"
+    if is_ic:
+        ds_subset = ds.sel({time_var: start_hours}, method="nearest")
+    else:
+        # Add a small buffer to ensure we capture the boundary times. Slice by position:
+        # GLBv0.08/expt_93.0 steps back once (2018-06-21 09:00 to 06:00), so its time
+        # index is not monotonic and label slicing fails.
+        times = ds[time_var].values
+        hit = np.flatnonzero((times >= start_hours - 0.1) & (times <= end_hours + 0.1))
+        if hit.size == 0:
+            logger.error(
+                f"Requested time range out of bounds for HYCOM. Required: {start_hours} to {end_hours}."
+            )
+            return None
+        ds_subset = ds.isel({time_var: slice(hit[0], hit[-1] + 1)})
+
+    lon_var = "lon" if "lon" in ds.coords else "longitude"
+    lat_var = "lat" if "lat" in ds.coords else "latitude"
+
+    ds_subset = ds_subset.sel({lat_var: slice(min_lat - 0.1, max_lat + 0.1)})
+
+    # The longitude convention varies by experiment, not by grid: the 5x-series GLBv0.08
+    # experiments (53.X, 56.3, 57.2, 57.7) use -180..180, the 9x-series (92.8, 92.9,
+    # 93.0) and ESPC-D-V02 use 0..360. Detect it per dataset and slice in the
+    # dataset's own convention; the output is always 0..360.
+    lon_hi = 360.0 if float(ds[lon_var].min()) >= 0 else 180.0
+    lon_lo = lon_hi - 360.0
+    ds_min_lon = (min_lon - lon_lo) % 360 + lon_lo
+    ds_max_lon = (max_lon - lon_lo) % 360 + lon_lo
+
+    # Handle wrapping if the bbox crosses the dataset's longitude seam
+    if ds_min_lon > ds_max_lon:
+        logger.info(
+            f"BBox crosses the {lon_lo:g}/{lon_hi:g} seam, performing dual-slice and concat."
         )
-        ds = xr.open_dataset(dap_url, engine="pydap", decode_times=False)
+        part1 = ds_subset.sel({lon_var: slice(ds_min_lon - 0.1, lon_hi)})
+        part2 = ds_subset.sel({lon_var: slice(lon_lo, ds_max_lon + 0.1)})
+        ds_subset = xr.concat([part1, part2], dim=lon_var, data_vars="all")
+    else:
+        ds_subset = ds_subset.sel({lon_var: slice(ds_min_lon - 0.1, ds_max_lon + 0.1)})
 
-        # HYCOM time axis is "hours since 2000-01-01 00:00:00"
-        epoch = pd.Timestamp("2000-01-01 00:00:00")
-        start_hours = (start_dt - epoch).total_seconds() / 3600.0
-        end_hours = (end_dt - epoch).total_seconds() / 3600.0
+    # Download only the fields forcingkit uses. OPeNDAP fetches each variable in its own
+    # request, and the GLB experiments also carry `tau` and four `*_bottom` fields, so this
+    # halves the round trips to a server that is often slow. It also gives every
+    # experiment the same variable set, which stitching requires.
+    ds_subset = ds_subset[[k for k in _RENAME if k in ds_subset.data_vars]]
 
-        time_var = "time"
-        if is_ic:
-            ds_subset = ds.sel({time_var: start_hours}, method="nearest")
-        else:
-            # Add a small buffer to ensure we capture the boundary times. Slice by position:
-            # GLBv0.08/expt_93.0 steps back once (2018-06-21 09:00 to 06:00), so its time
-            # index is not monotonic and label slicing fails.
-            times = ds[time_var].values
-            hit = np.flatnonzero(
-                (times >= start_hours - 0.1) & (times <= end_hours + 0.1)
-            )
-            if hit.size == 0:
-                logger.error(
-                    f"Requested time range out of bounds for HYCOM. Required: {start_hours} to {end_hours}."
-                )
-                return None
-            ds_subset = ds.isel({time_var: slice(hit[0], hit[-1] + 1)})
+    logger.info("Executing OPeNDAP download for HYCOM subset...")
+    ds_subset = ds_subset.compute()
+    ds_subset = ds_subset.assign_coords({lon_var: ds_subset[lon_var] % 360})
+    if not is_ic:
+        # Restore a strictly increasing time axis within the requested range.
+        ds_subset = ds_subset.sortby(time_var)
+        ds_subset = ds_subset.isel(
+            {time_var: ~ds_subset.indexes[time_var].duplicated()}
+        )
+        ds_subset = ds_subset.sel({time_var: slice(start_hours - 0.1, end_hours + 0.1)})
 
-        lon_var = "lon" if "lon" in ds.coords else "longitude"
-        lat_var = "lat" if "lat" in ds.coords else "latitude"
+    # Rename variables to canonical names if necessary
+    actual_rename = {k: v for k, v in _RENAME.items() if k in ds_subset.data_vars}
+    ds_subset = ds_subset.rename(actual_rename)
 
-        ds_subset = ds_subset.sel({lat_var: slice(min_lat - 0.1, max_lat + 0.1)})
+    # Explicitly decode the raw float time coordinate to pandas DatetimeIndex lengths
+    if time_var in ds_subset.coords:
+        ds_subset[time_var] = epoch + pd.to_timedelta(
+            ds_subset[time_var].values, unit="h"
+        )
 
-        # The longitude convention varies by experiment, not by grid: the 5x-series GLBv0.08
-        # experiments (53.X, 56.3, 57.2, 57.7) use -180..180, the 9x-series (92.8, 92.9,
-        # 93.0) and ESPC-D-V02 use 0..360. Detect it per dataset and slice in the
-        # dataset's own convention; the output is always 0..360.
-        lon_hi = 360.0 if float(ds[lon_var].min()) >= 0 else 180.0
-        lon_lo = lon_hi - 360.0
-        ds_min_lon = (min_lon - lon_lo) % 360 + lon_lo
-        ds_max_lon = (max_lon - lon_lo) % 360 + lon_lo
-
-        # Handle wrapping if the bbox crosses the dataset's longitude seam
-        if ds_min_lon > ds_max_lon:
-            logger.info(
-                f"BBox crosses the {lon_lo:g}/{lon_hi:g} seam, performing dual-slice and concat."
-            )
-            part1 = ds_subset.sel({lon_var: slice(ds_min_lon - 0.1, lon_hi)})
-            part2 = ds_subset.sel({lon_var: slice(lon_lo, ds_max_lon + 0.1)})
-            ds_subset = xr.concat([part1, part2], dim=lon_var, data_vars="all")
-        else:
-            ds_subset = ds_subset.sel(
-                {lon_var: slice(ds_min_lon - 0.1, ds_max_lon + 0.1)}
-            )
-
-        # Download only the fields forcingkit uses. OPeNDAP fetches each variable in its own
-        # request, and the GLB experiments also carry `tau` and four `*_bottom` fields, so this
-        # halves the round trips to a server that is often slow. It also gives every
-        # experiment the same variable set, which stitching requires.
-        ds_subset = ds_subset[[k for k in _RENAME if k in ds_subset.data_vars]]
-
-        logger.info("Executing OPeNDAP download for HYCOM subset...")
-        ds_subset = ds_subset.compute()
-        ds_subset = ds_subset.assign_coords({lon_var: ds_subset[lon_var] % 360})
-        if not is_ic:
-            # Restore a strictly increasing time axis within the requested range.
-            ds_subset = ds_subset.sortby(time_var)
-            ds_subset = ds_subset.isel(
-                {time_var: ~ds_subset.indexes[time_var].duplicated()}
-            )
-            ds_subset = ds_subset.sel(
-                {time_var: slice(start_hours - 0.1, end_hours + 0.1)}
-            )
-
-        # Rename variables to canonical names if necessary
-        actual_rename = {k: v for k, v in _RENAME.items() if k in ds_subset.data_vars}
-        ds_subset = ds_subset.rename(actual_rename)
-
-        # Explicitly decode the raw float time coordinate to pandas DatetimeIndex lengths
-        if time_var in ds_subset.coords:
-            ds_subset[time_var] = epoch + pd.to_timedelta(
-                ds_subset[time_var].values, unit="h"
-            )
-
-        return ds_subset
-
-    except Exception as e:
-        logger.error(f"Failed to fetch from HYCOM ({dataset_url}): {e}")
-        return None
+    return ds_subset

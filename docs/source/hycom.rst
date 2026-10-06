@@ -133,8 +133,10 @@ How forcingkit reads it
 5. **Stitch.** Pieces from different experiments are concatenated in time. A piece on a
    different grid is interpolated (bilinear) onto the grid of the first piece. The step at a
    switch is read from both experiments; the newer one's copy is kept.
-6. **All or nothing.** If any piece or field fails, the fetch returns nothing, so the
-   dispatcher reports the failure rather than writing a shortened store.
+6. **Retry, then all or nothing.** A dataset whose read fails (a timeout or other error) is
+   read once more after 30 s. If any piece or field still fails, the fetch returns nothing, so
+   the dispatcher reports the failure rather than writing a shortened store. A window with no
+   data in a dataset's time range is not retried.
 
 Output is a Dataset with ``u``, ``v``, ``temp``, ``salt`` (``time, depth, lat, lon``) and
 ``zeta`` (``time, lat, lon``). Land and cells below the sea floor are NaN. The dispatcher then
@@ -149,8 +151,9 @@ Known issues
   alike, and the same request would succeed minutes later. Stalls were far more frequent while
   other requests from the same machine were running in parallel; fetches run one at a time
   succeeded. One ESPC-D-V02 window needs at least five data requests (one per field), so it is
-  the most exposed. A failed fetch can usually be retried; avoid running several HYCOM fetches
-  at once.
+  the most exposed. The fetcher therefore reads each dataset a second time before giving up;
+  a window that still fails can usually be fetched again later. Avoid running several HYCOM
+  fetches at once.
 - **Gaps inside an experiment.** Most steps are 3 hours apart, but every experiment has a few
   longer gaps, up to 51 hours (for example in GLBv0.08 ``expt_93.0``, ``expt_92.9`` and
   ESPC-D-V02). They are passed through unfilled, and the dispatcher's hourly interpolation then
@@ -186,12 +189,16 @@ these returned all five fields on 10 x 5 cells and 40 depths:
    * - 2026-10-01 00:00, 6 h
      - ESPC-D-V02 (five datasets)
      - 3 steps, in 216 s; ``zeta`` reduced from hourly to 3-hourly.
+   * - 2018-12-04 06:00, 12 h
+     - GLBv0.08 then GLBy0.08 ``expt_93.0``
+     - 5 steps, in 367 s; 12:00 read from both, kept once.
+   * - 2024-09-04 18:00, 12 h
+     - GLBy0.08 ``expt_93.0`` then ESPC-D-V02
+     - 5 steps, in 334 s. ESPC-D-V02 marks a few more cells as land or below the sea floor
+       than GLBy0.08 in this box.
 
-A window across the 2024-09-05 switch was tried four times and one across 2018-12-04 12:00
-once. Every piece (GLBv0.08 and GLBy0.08 ``expt_93.0``, and each ESPC-D-V02 field) was read
-successfully in at least one attempt, but no attempt completed all of its pieces: each stopped
-on one read timeout (see `Known issues`_). The stitching itself is covered by the unit tests
-below.
+Before the per-dataset retry was added, five earlier attempts at the two stitched windows each
+stopped on one read timeout (see `Known issues`_).
 
 Tests
 -----
@@ -199,8 +206,8 @@ Tests
 - ``tests/unit/test_hycom.py``: experiment resolution and window splitting at every switch,
   the URLs for GLBv0.08 and the ESPC-D-V02 fields, stitching across 2018-12-04 (regridding and
   the duplicated switch step) and across 2024-09-05 (merged ESPC-D-V02 fields), the all or
-  nothing rule, both longitude conventions and the seam, and the non-monotonic time axis. No
-  network.
+  nothing rule, the retry after a failed read (and none for an empty time range), both
+  longitude conventions and the seam, and the non-monotonic time axis. No network.
 
 .. code-block:: bash
 

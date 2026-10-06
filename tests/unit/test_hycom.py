@@ -219,3 +219,45 @@ def test_fetch_non_monotonic_time():
         )
     expected = pd.date_range("2018-06-21 03:00", "2018-06-21 15:00", freq="3h")
     assert ds.indexes["time"].equals(expected)
+
+
+def _fetch_2025(open_dataset):
+    """`_fetch_hycom_data` for 2025-01-01 12:00 to 18:00 with `xr.open_dataset` and
+    `time.sleep` patched; returns (result, open_dataset mock, sleep mock)."""
+    with (
+        patch("forcingkit.fetchers.hycom.xr.open_dataset", **open_dataset) as mock_open,
+        patch("forcingkit.fetchers.hycom.time.sleep") as mock_sleep,
+    ):
+        ds = _fetch_hycom_data(
+            pd.Timestamp("2025-01-01 12:00"),
+            pd.Timestamp("2025-01-01 18:00"),
+            BBOX,
+            f"{TDS}/ESPC-D-V02/u3z",
+        )
+    return ds, mock_open, mock_sleep
+
+
+def test_fetch_retries_after_failed_read():
+    """A read that times out is repeated once, after a pause, and the retry's data is used."""
+    raw = _raw(np.arange(0.0, 360.0))
+    ds, mock_open, mock_sleep = _fetch_2025(
+        {"side_effect": [TimeoutError("read"), raw]}
+    )
+    assert ds is not None and ds.sizes["time"] == 3
+    assert mock_open.call_count == 2
+    mock_sleep.assert_called_once()
+
+
+def test_fetch_gives_up_after_second_failure():
+    ds, mock_open, _ = _fetch_2025({"side_effect": TimeoutError("read")})
+    assert ds is None
+    assert mock_open.call_count == 2
+
+
+def test_fetch_does_not_retry_out_of_range():
+    """A window outside the dataset's time axis is not a transient failure."""
+    raw = _raw(np.arange(0.0, 360.0), time=[100.0, 103.0])
+    ds, mock_open, mock_sleep = _fetch_2025({"return_value": raw})
+    assert ds is None
+    assert mock_open.call_count == 1
+    mock_sleep.assert_not_called()
