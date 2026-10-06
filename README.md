@@ -9,9 +9,9 @@
 </div>
 
 <div align="center">
-  <img src="https://raw.githubusercontent.com/lhzn-io/forcingkit/main/docs/source/_static/forcingkit-noreaster-wind.gif" alt="Animation of the HRRR 10 m wind from the NY Bight to Cape Cod, hourly from 2026-09-25 23:00 to 2026-09-28 01:00 UTC" width="720" />
+  <img src="https://raw.githubusercontent.com/lhzn-io/forcingkit/main/docs/source/_static/forcingkit-noreaster-wind.gif" alt="Animation of the HRRR 10 m wind from the NY Bight to Cape Cod, every 3 hours from 2026-09-22 00:00 to 2026-09-29 12:00 UTC" width="720" />
   <br />
-  <sub>HRRR 10 m wind served by forcingkit for the 26-27 September 2026 nor'easter, NY Bight to Cape Cod, hourly (peak 25.9 m/s). The forcingkit viewer's time slider, played.</sub>
+  <sub>HRRR 10 m wind served by forcingkit through the 26-27 September 2026 nor'easter, NY Bight to Cape Cod, from the calm of 22 September to the calm of 29 September, every 3 hours (peak 25.9 m/s). The forcingkit viewer's time slider, played.</sub>
 </div>
 
 Spatiotemporal forcing for computational Earth-system models: selects, regrids and serves model-ready time series with provenance.
