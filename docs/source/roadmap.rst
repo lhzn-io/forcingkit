@@ -45,8 +45,9 @@ Current coverage
      - 2014-07-30 on
      - 3 km
 
-So today the only current-date parent ocean outside the US Northeast is HYCOM, at 1/12 degree and
-in the legacy output layout, and there is no atmosphere outside the contiguous US. Older years and other regions rely on ERA5 through NumericalEarth in the model.
+So today the only parent ocean outside the US Northeast is HYCOM, at 1/12 degree and in the
+legacy output layout, and there is no atmosphere outside the contiguous US: there, and before
+2014-07-30, the atmosphere comes from ERA5 through NumericalEarth in the model.
 
 Planned work
 ------------
@@ -57,13 +58,16 @@ Planned work
 
    * - Item
      - Detail
+   * - HYCOM as a ``z-v3`` parent
+     - The cheapest conversion, and the one that gives a ``z-v3`` parent everywhere: HYCOM is
+       already on a regular longitude/latitude grid at fixed depths in metres, with temperature
+       and salinity, so it needs regridding onto the ``z-v3`` grid and an hour-by-hour
+       ``iter_parent``, but no sigma-to-depth step. Tidal content changes at 2024-09-05
+       (:doc:`hycom`), so the store should record it.
    * - NYOFS and DBOFS as ``z-v3`` parents
      - Deliver both on true depths with geographic axes, like :doc:`necofs`. NYOFS carries no
        temperature or salinity, so those would come from another donor. The scope is in
        :doc:`nyofs`.
-   * - A global parent on ``z-v3``
-     - HYCOM reaches the present through ESPC-D-V02 (:doc:`hycom`), but at 1/12 degree and in the
-       legacy output layout. Copernicus GLO12 or RTOFS (below) would add a second global source.
    * - HRRR forecast mode
      - One cycle's f01 to f48 for forecasts, alongside the chained one-hour forecasts used for
        hindcasts (:doc:`atmospheric_forcing`).
@@ -89,25 +93,27 @@ Global parent ocean
        <https://data.marine.copernicus.eu/product/GLOBAL_ANALYSISFORECAST_PHY_001_024/description>`__)
      - NEMO, 1/12 degree, 50 levels, hourly and daily fields, from 2020-11-01 to 10 days ahead,
        global. Free registration; cloud-native (ARCO Zarr) access.
-     - The global fallback for current dates, and the backbone for any region outside the US.
+     - Hourly fields and a second, independent model to set against HYCOM; the backbone for
+       any region outside the US.
    * - **GLORYS12 reanalysis** (Mercator Ocean, `GLOBAL_MULTIYEAR_PHY_001_030
        <https://data.marine.copernicus.eu/product/GLOBAL_MULTIYEAR_PHY_001_030/description>`__)
      - NEMO with data assimilation, 1/12 degree, 50 levels, daily means from 1993-01-01 to
        2026-08 (Lellouche et al., 2021).
-     - A consistent parent for any year since 1993, anywhere; daily, so tides must come from
-       elsewhere.
+     - One continuous reanalysis from 1993, where HYCOM chains several experiments from 1994;
+       daily, so tides must come from elsewhere.
    * - **NOAA Global RTOFS** (`on AWS <https://registry.opendata.aws/noaa-rtofs/>`__)
      - HYCOM-based, 1/12 degree. Besides the global output, 6-hourly netCDF already on z levels
        for three US subdomains (``US_east``, ``US_west``, ``alaska``), from 2024-01-27.
-     - A NOAA global fallback whose US cuts need no vertical regridding.
+     - US subsets already on z levels, so they need no vertical regridding.
 
 US coasts without a parent
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The rest of the NOAA Operational Forecast Systems. Each is on AWS (``noaa-nos-ofs-pds``) per day
-from late 2024 (2024-10-01 for CBOFS, 2024-11-19 for most) and at NCEI before that, in the layouts forcingkit's NYOFS and DBOFS readers
-already handle. The ROMS systems can share the DBOFS reader and the FVCOM systems the NECOFS mesh
-interpolation, so each is mostly configuration and a domain.
+from late 2024 (2024-10-01 for CBOFS, 2024-11-19 for most) and at NCEI before that, in the
+layouts forcingkit's NYOFS and DBOFS readers already handle. The ROMS systems can share the DBOFS
+reader and the FVCOM systems the NECOFS mesh interpolation, so each is mostly configuration and
+a domain.
 
 .. list-table::
    :header-rows: 1

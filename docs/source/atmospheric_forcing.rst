@@ -2,7 +2,8 @@ Atmospheric Forcing Datasets
 ============================
 
 As of 2026-10-04. Which atmospheric datasets can force a coastal ocean model through this service
-or through `NumericalEarth <https://github.com/NumericalEarth/NumericalEarth.jl>`__, how they compare, and which to choose.
+or through `NumericalEarth <https://github.com/NumericalEarth/NumericalEarth.jl>`__, how they
+compare, and which to choose.
 
 An ocean model's surface fluxes need, at every hour of the run: 10 m wind (eastward and
 northward), 2 m air temperature and specific humidity, surface pressure, precipitation, and
@@ -151,9 +152,11 @@ ERA5 (fallback)
 
 *Provenance.* `ECMWF <https://www.ecmwf.int/>`__'s fifth-generation global reanalysis for the
 `Copernicus Climate Change Service <https://climate.copernicus.eu/>`__ (`Hersbach et al., 2020
-<https://doi.org/10.1002/qj.3803>`__): 0.25 degree grid (about 31 km), hourly, 1940 to the present. ERA5T, the initial release,
+<https://doi.org/10.1002/qj.3803>`__): 0.25 degree grid (about 31 km), hourly, 1940 to the present.
+ERA5T, the initial release,
 appears about five days behind real time and is overwritten by the final ERA5 two to three months
-later. Requires a free `Copernicus Climate Data Store <https://cds.climate.copernicus.eu/>`__ account (credentials in ``~/.cdsapirc``);
+later. Requires a free `Copernicus Climate Data Store <https://cds.climate.copernicus.eu/>`__
+account (credentials in ``~/.cdsapirc``);
 Copernicus licence, attribution required.
 
 *How it is used.* A model reads it through NumericalEarth's ``ERA5PrescribedAtmosphere`` and
@@ -167,7 +170,8 @@ standard against which forcing biases are judged.
 
 *Limits.* At 31 km a 15 km coastal domain spans one or two ERA5 cells, so the forcing is nearly
 uniform and smears the coast: in the first hours of 2026-04-02 over such a domain off New Jersey,
-the ERA5 box (which includes New Jersey land) was about 3 K warmer at 2 m and had about half HRRR's wind speed. Latency rules out
+the ERA5 box (which includes New Jersey land) was about 3 K warmer at 2 m and had about half HRRR's
+wind speed. Latency rules out
 anything closer than five days to the present.
 
 Choosing
@@ -220,6 +224,7 @@ Links
 - NOAA HRRR on AWS: https://registry.opendata.aws/noaa-hrrr-pds/
 - NOAA RRFS: https://gsl.noaa.gov/rrfs/ ; operational date and retirements:
   https://gribstream.com/blog/noaa-rrfs-refs-operational-august-2026
-- ERA5T latency: https://climate.copernicus.eu/key-update-climate-dataset-brings-data-five-days-behind-real-time
+- ERA5T latency:
+  https://climate.copernicus.eu/key-update-climate-dataset-brings-data-five-days-behind-real-time
 - ECMWF open data: https://www.ecmwf.int/en/forecasts/datasets/open-data
 - JRA55-do: https://climate.mri-jma.go.jp/pub/ocean/JRA55-do/

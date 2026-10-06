@@ -321,7 +321,9 @@ Institutions and data services
   <https://opendap.co-ops.nos.noaa.gov/thredds/catalog/catalog.html>`__
 - `NOAA NCEI <https://www.ncei.noaa.gov/>`__: `NYOFS files
   <https://www.ncei.noaa.gov/thredds/catalog/model-nyofs-files/catalog.html>`__
-- `NOAA Open Data Dissemination <https://www.noaa.gov/information-technology/open-data-dissemination>`__:
+- `NOAA Open Data Dissemination
+  <https://www.noaa.gov/information-technology/open-data-dissemination>`__:
   `OFS on AWS <https://github.com/NOAA-Big-Data-Program/nodd-data-docs/blob/main/OFS/README.md>`__
-- `Stevens Institute of Technology, Davidson Laboratory <https://www.stevens.edu/davidson-laboratory>`__:
+- `Stevens Institute of Technology, Davidson Laboratory
+  <https://www.stevens.edu/davidson-laboratory>`__:
   `NYHOPS <https://hudson.dl.stevens-tech.edu/maritimeforecast/>`__

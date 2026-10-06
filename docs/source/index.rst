@@ -27,7 +27,8 @@ that change those details without notice.
 
 forcingkit is a FastAPI service that sits between those providers and model codes such as
 `Oceananigans.jl <https://github.com/CliMA/Oceananigans.jl>`__ (for example through
-`NumericalEarth <https://github.com/NumericalEarth/NumericalEarth.jl>`__). For a bounding box and a time window it:
+`NumericalEarth <https://github.com/NumericalEarth/NumericalEarth.jl>`__). For a bounding box and a
+time window it:
 
 1. picks the source (the "donor") best suited to the box, and falls back to the next one if the
    first cannot deliver;
@@ -107,7 +108,7 @@ Parent-ocean donors at a glance
      - HYCOM GLBv0.08, GLBy0.08 and ESPC-D-V02, regular
      - 1/12 degree (about 9 km)
      - Global; 1994 to the present
-     - Legacy output; last-resort fallback
+     - Legacy output; last-resort fallback; tidal only from 2024-09-05
 
 Quick start
 -----------

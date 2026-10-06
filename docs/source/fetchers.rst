@@ -19,11 +19,12 @@ Atmospheric forcing (``/api/v1/atmosphere``)
      - NOAA `High-Resolution Rapid Refresh <https://rapidrefresh.noaa.gov/hrrr/>`__ (developed by
        the `NOAA Global Systems Laboratory <https://gsl.noaa.gov/>`__, run operationally by
        `NCEP <https://www.nco.ncep.noaa.gov/>`__), 3 km, from the anonymous AWS S3 bucket
-       `noaa-hrrr-bdp-pds <https://registry.opendata.aws/noaa-hrrr-pds/>`__; the archive starts 2014-07-30. Surface fields are interpolated to a
-       regular 0.03 degree grid and streamed hour by hour (schema ``hrrr-atm-v1``). Earlier dates
-       use `ERA5 <https://cds.climate.copernicus.eu/>`__ through
-       `NumericalEarth <https://github.com/NumericalEarth/NumericalEarth.jl>`__ in the model, outside this service. See
-       :doc:`atmospheric_forcing`.
+       `noaa-hrrr-bdp-pds <https://registry.opendata.aws/noaa-hrrr-pds/>`__; the archive starts
+       2014-07-30. Surface fields are interpolated to a regular 0.03 degree grid and streamed hour
+       by hour (schema ``hrrr-atm-v1``). Earlier dates use `ERA5
+       <https://cds.climate.copernicus.eu/>`__ through `NumericalEarth
+       <https://github.com/NumericalEarth/NumericalEarth.jl>`__ in the model, outside this
+       service. See :doc:`atmospheric_forcing`.
 
 Parent ocean (``/api/v1/obc``)
 ------------------------------
@@ -37,7 +38,8 @@ Parent ocean (``/api/v1/obc``)
    * - **NECOFS**
      - `Northeast Coastal Ocean Forecast System <https://fvcom.smast.umassd.edu/?p=20>`__, `FVCOM
        <https://fvcom.smast.umassd.edu/>`__ GOM7 (`UMass Dartmouth SMAST
-       <https://www.umassd.edu/smast/>`__ and `WHOI <https://www.whoi.edu/>`__), unstructured mesh with 45 sigma layers. Daily history files from 2025-01-01, then the rolling forecast.
+       <https://www.umassd.edu/smast/>`__ and `WHOI <https://www.whoi.edu/>`__), unstructured mesh
+       with 45 sigma layers. Daily history files from 2025-01-01, then the rolling forecast.
        The only donor that streams the ``z-v3`` parent store. See :doc:`necofs`.
    * - **NYOFS**
      - `NOAA New York/New Jersey Operational Forecast System
@@ -58,7 +60,8 @@ Parent ocean (``/api/v1/obc``)
        the present. The experiment follows the date: GLBv0.08 ``expt_53.X`` (reanalysis) to
        2015, a chain of GLBv0.08 analysis experiments to 2018-12-04, GLBy0.08 ``expt_93.0`` to
        2024-09-05, then ESPC-D-V02. A window that spans a switch is stitched; if any piece fails,
-       the whole window fails. Last-resort fallback; legacy output layout.
+       the whole window fails. Tidal only from 2024-09-05. Last-resort fallback; legacy output
+       layout.
 
 `TPXO10 <https://www.tpxo.net/>`__ tidal harmonics are a roadmap item, not integrated; the
 `pyTMD <https://github.com/pyTMD/pyTMD>`__ dependency was removed on
@@ -149,8 +152,9 @@ As checked on 2026-10-06, NYOFS and DBOFS output is available from three places:
      - From 2024-11-19, one directory per day, ``<ofs>/netcdf/{yyyy}/{mm}/{dd}/``; the first day
        holds only its last cycle. Before that, one flat directory per month,
        ``<ofs>/netcdf/{yyyymm}/``, with a mix of file names (NYOFS 2024-07 uses the older names,
-       DBOFS 2024-07 the newer ones); several of those months are partial and some are absent (NYOFS lacks 2024-01 to 2024-03, 2024-05
-       and 2024-06; DBOFS lacks 2024-02 and starts 2024-01 on the 29th).
+       DBOFS 2024-07 the newer ones); several of those months are partial and some are absent
+       (NYOFS lacks 2024-01 to 2024-03, 2024-05 and 2024-06; DBOFS lacks 2024-02 and starts
+       2024-01 on the 29th).
 
 .. note::
    An earlier version of this page said that NCEI stopped archiving at the end of November 2023,
@@ -181,7 +185,9 @@ Common processing
 -----------------
 
 - **Hourly time axis.** Non-streaming donors are resampled to a strict hourly index by linear
-  interpolation. Streaming donors deliver hourly records directly.
+  interpolation. Streaming donors deliver hourly records directly. HYCOM steps are 3 hours apart
+  with occasional gaps of up to 51 hours, which this bridges with a straight line; a store does
+  not yet record the longest gap it filled (:doc:`hycom`).
 - **Float32 fields, full-precision coordinates.** Data variables are cast to Float32 for the
   model; ``lat``, ``lon``, ``z`` and ``z_face`` keep full precision, since Float32 longitudes near
   -74 resolve only about 8e-6 degrees.

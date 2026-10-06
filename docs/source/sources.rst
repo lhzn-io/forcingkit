@@ -35,7 +35,8 @@ Providers
      - Blumberg and Mellor (1987) for POM (NYOFS); Shchepetkin and McWilliams (2005) for ROMS
        (DBOFS); NOAA attribution as for HRRR.
    * - HYCOM
-     - The `HYCOM consortium <https://www.hycom.org/>`__ (US Navy, NOAA and academic partners)
+     - The `HYCOM consortium <https://www.hycom.org/>`__ (US Navy, NOAA and academic partners);
+       from 2024-09-05 the US Navy's ESPC-D-V02 analysis, served by the consortium
      - Bleck (2002) for the model; Chassignet et al. (2007) for the data-assimilative system.
    * - ERA5 (used through NumericalEarth, not served here)
      - `ECMWF <https://www.ecmwf.int/>`__ for the `Copernicus Climate Change Service

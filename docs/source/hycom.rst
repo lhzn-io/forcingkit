@@ -8,7 +8,9 @@ live against it on the same day.
 HYCOM is forcingkit's global parent ocean and the dispatcher's last-resort donor: it accepts any
 box and is tried after NYOFS, DBOFS and NECOFS (:doc:`fetchers`). It covers 1994 to the present
 by switching between several experiments, and delivers the legacy output layout rather than the
-``z-v3`` parent store.
+``z-v3`` parent store. Its fields are already on a regular longitude/latitude grid at fixed
+depths in metres, with temperature and salinity, so it is the donor closest to ``z-v3``
+(:doc:`roadmap`).
 
 System overview
 ---------------
@@ -73,6 +75,7 @@ Experiments forcingkit reads
 Each experiment serves from the time in the third column until the next one starts. Where two
 overlap, the switch is at the newer one's first time step, with one exception: GLBy0.08
 ``expt_93.0`` is kept to its last step on 2024-09-05 although ESPC-D-V02 begins on 2024-08-10.
+The GLB experiments carry no tides; ESPC-D-V02 does (see `Tides`_).
 Times before 1994-01-01 are not served.
 
 Grids
@@ -104,6 +107,29 @@ experiments carry all five in one dataset, 3-hourly, plus ``tau`` (analysis time
 ``*_bottom`` fields, which forcingkit does not download. ESPC-D-V02 publishes one dataset per
 field: ``u3z``, ``v3z``, ``t3z`` and ``s3z`` are 3-hourly; ``ssh`` is hourly. All use the time
 unit "hours since 2000-01-01 00:00:00".
+
+Tides
+~~~~~
+
+The record changes character at 2024-09-05. Sea surface height sampled on 2026-10-06 at
+40.40 N, 72.48 W (open water south of Long Island) shows:
+
+- **ESPC-D-V02** (hourly ``ssh``): a semidiurnal tide of about 0.43 m amplitude with a period
+  near 12.4 hours.
+- **GLBy0.08** ``expt_93.0`` (3-hourly): variations within about 5 cm and no tidal period. The
+  GLB experiments are run without tidal forcing.
+
+So a window before 2024-09-05 is a non-tidal ocean and a window after it is a tidal one, and a
+window across the date changes from one to the other. Two consequences:
+
+- **Do not add tides twice.** A model that adds its own tidal boundary forcing should do so for
+  GLB-era windows only; ESPC-D-V02 already contains the tide.
+- **Tidal sampling.** The fetcher currently reduces ESPC-D-V02's hourly ``zeta`` to the
+  3-hourly steps of the other fields (step 3 below). That leaves four samples per semidiurnal
+  cycle, and the dispatcher's linear interpolation back to hourly then underestimates the tide
+  between samples by up to about 30 percent. Velocities, temperature and salinity are published
+  only 3-hourly. Keeping ``zeta`` hourly and recording tidal content in the store's attributes
+  is planned.
 
 Where the data lives
 --------------------
@@ -161,8 +187,8 @@ Known issues
 - **GLBv0.08 ``expt_93.0`` steps back.** Its time axis goes from 2018-06-21 09:00 to 06:00,
   repeating 06:00. The fetcher selects by position and drops the duplicate.
 - **Dead path for ``expt_53.X``.** ``GLBy0.08/expt_53.X`` answers HTTP 200 with an empty
-  dataset description; the reanalysis lives under ``GLBv0.08``. forcingkit read the GLBy0.08
-  path before 2026-10-06, so HYCOM served nothing before 2018-12-04 until then.
+  dataset description; the reanalysis lives under ``GLBv0.08``, which is the path forcingkit
+  reads.
 - **GLBy0.08 ``expt_93.0`` starts at 12:00.** Its first step is 2018-12-04 12:00, not the
   midnight that the catalogue date suggests; the switch from GLBv0.08 ``expt_93.0`` is at
   12:00.
@@ -197,8 +223,9 @@ these returned all five fields on 10 x 5 cells and 40 depths:
      - 5 steps, in 334 s. ESPC-D-V02 marks a few more cells as land or below the sea floor
        than GLBy0.08 in this box.
 
-Before the per-dataset retry was added, five earlier attempts at the two stitched windows each
-stopped on one read timeout (see `Known issues`_).
+The times are for windows of 6 to 12 hours; multi-day windows have not been timed. Most of the
+time goes to per-request latency on the server rather than to data volume, so a longer window
+need not take proportionally longer, but plan for minutes per fetch and see `Known issues`_.
 
 Tests
 -----

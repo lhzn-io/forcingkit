@@ -20,7 +20,8 @@ Regional Association of Coastal Ocean Observing Systems <https://neracoos.org/>`
 It is built on `FVCOM <https://fvcom.smast.umassd.edu/>`__, the unstructured-grid, finite-volume,
 free-surface, primitive-equation coastal ocean model introduced by `Chen, Liu and Beardsley
 (2003) <https://doi.org/10.1175/1520-0426(2003)020%3C0159:AUGFVT%3E2.0.CO;2>`__ and developed by
-Changsheng Chen's group at SMAST with Robert C. Beardsley at WHOI. forcingkit reads its **GOM7** configuration, which
+Changsheng Chen's group at SMAST with Robert C. Beardsley at WHOI. forcingkit reads its **GOM7**
+configuration, which
 spans the Gulf of Maine, Georges Bank, southern New England, Long Island Sound, New York Harbor
 and the Mid-Atlantic Bight shelf.
 
