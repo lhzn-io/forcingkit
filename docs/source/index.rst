@@ -103,10 +103,10 @@ Parent-ocean donors at a glance
      - About 130 to 800 m in the NY Harbor and Long Island Sound region
      - Gulf of Maine to the Mid-Atlantic Bight; daily archive from 2025-01-01
      - Streams ``z-v3`` hour by hour; the recommended donor
-   * - HYCOM
-     - HYCOM GLBy0.08, regular
+   * - :doc:`HYCOM <hycom>`
+     - HYCOM GLBv0.08, GLBy0.08 and ESPC-D-V02, regular
      - 1/12 degree (about 9 km)
-     - Global; ``expt_93.0`` ends 2024-09-05
+     - Global; 1994 to the present
      - Legacy output; last-resort fallback
 
 Quick start
@@ -151,6 +151,7 @@ PyPI as ``forcingkit``.
    fetchers
    necofs
    nyofs
+   hycom
    atmospheric_forcing
 
 .. toctree::

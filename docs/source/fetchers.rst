@@ -52,13 +52,13 @@ Parent ocean (``/api/v1/obc``)
        `ROMS <https://www.myroms.org/>`__, about 100 m, domain
        [-75.875, 37.810, -73.264, 40.206]. 7-day CO-OPS aggregation, then the hourly nowcast
        archive (AWS S3 from 2024-11-19, NCEI from 2014). Legacy output layout.
-   * - **HYCOM**
-     - `HYCOM <https://www.hycom.org/>`__ GLBy0.08 (1/12 degree, about 9 km), global, from the
-       `HYCOM consortium data server <https://tds.hycom.org/thredds/catalog.html>`__:
-       ``expt_93.0`` from 2018-12-04, ``expt_53.X`` before, stitched when a window spans the
-       change. ``expt_93.0`` ends at 2024-09-05 09:00 UTC and its successor (ESPC-D-V02) is not
-       yet integrated, so HYCOM cannot serve later dates. Last-resort fallback; legacy output
-       layout.
+   * - :doc:`HYCOM <hycom>`
+     - `HYCOM <https://www.hycom.org/>`__ (1/12 degree, about 9 km, 40 z levels), global, from
+       the `HYCOM consortium data server <https://tds.hycom.org/thredds/catalog.html>`__, 1994 to
+       the present. The experiment follows the date: GLBv0.08 ``expt_53.X`` (reanalysis) to
+       2015, a chain of GLBv0.08 analysis experiments to 2018-12-04, GLBy0.08 ``expt_93.0`` to
+       2024-09-05, then ESPC-D-V02. A window that spans a switch is stitched; if any piece fails,
+       the whole window fails. Last-resort fallback; legacy output layout.
 
 `TPXO10 <https://www.tpxo.net/>`__ tidal harmonics are a roadmap item, not integrated; the
 `pyTMD <https://github.com/pyTMD/pyTMD>`__ dependency was removed on

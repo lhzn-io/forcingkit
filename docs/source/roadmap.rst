@@ -36,17 +36,17 @@ Current coverage
      - Delaware Bay and offshore New Jersey
      - 2014 on
      - ROMS, about 100 m
-   * - HYCOM
+   * - :doc:`HYCOM <hycom>`
      - Global
-     - To 2024-09-05
+     - 1994 on
      - 1/12 degree
    * - :doc:`HRRR <atmospheric_forcing>`
      - Contiguous US (atmosphere)
      - 2014-07-30 on
      - 3 km
 
-So today there is no current-date parent ocean outside the US Northeast, and no atmosphere outside
-the contiguous US. Older years and other regions rely on ERA5 through NumericalEarth in the model.
+So today the only current-date parent ocean outside the US Northeast is HYCOM, at 1/12 degree and
+in the legacy output layout, and there is no atmosphere outside the contiguous US. Older years and other regions rely on ERA5 through NumericalEarth in the model.
 
 Planned work
 ------------
@@ -61,9 +61,9 @@ Planned work
      - Deliver both on true depths with geographic axes, like :doc:`necofs`. NYOFS carries no
        temperature or salinity, so those would come from another donor. The scope is in
        :doc:`nyofs`.
-   * - A global parent for current dates
-     - HYCOM's ``expt_93.0`` ended on 2024-09-05. A successor is in progress; Copernicus GLO12 or
-       RTOFS (below) would also fill the gap.
+   * - A global parent on ``z-v3``
+     - HYCOM reaches the present through ESPC-D-V02 (:doc:`hycom`), but at 1/12 degree and in the
+       legacy output layout. Copernicus GLO12 or RTOFS (below) would add a second global source.
    * - HRRR forecast mode
      - One cycle's f01 to f48 for forecasts, alongside the chained one-hour forecasts used for
        hindcasts (:doc:`atmospheric_forcing`).

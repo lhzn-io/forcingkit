@@ -250,8 +250,8 @@ Notes and limits
 ----------------
 
 - **Archive gaps.** See the list above. A request that touches a missing day fails; with
-  fallback allowed, the dispatcher then tries HYCOM, which ends at 2024-09-05 and so cannot cover
-  any NECOFS-era date.
+  fallback allowed, the dispatcher then tries :doc:`hycom`, which covers every NECOFS-era date
+  but at 1/12 degree and in the legacy output layout.
 - **Probe timeout.** If SMAST is slow to answer the 5 s probe, the fetcher opens the rolling
   forecast for that hour and, for anything older than the forecast, fails. Retrying usually
   succeeds.
