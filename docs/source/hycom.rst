@@ -120,16 +120,35 @@ The record changes character at 2024-09-05. Sea surface height sampled on 2026-1
   GLB experiments are run without tidal forcing.
 
 So a window before 2024-09-05 is a non-tidal ocean and a window after it is a tidal one, and a
-window across the date changes from one to the other. Two consequences:
+window across the date changes from one to the other. The fetcher records which in the
+``tides`` attribute of the output, which the dispatcher carries into the store:
 
-- **Do not add tides twice.** A model that adds its own tidal boundary forcing should do so for
-  GLB-era windows only; ESPC-D-V02 already contains the tide.
-- **Tidal sampling.** The fetcher currently reduces ESPC-D-V02's hourly ``zeta`` to the
-  3-hourly steps of the other fields (step 3 below). That leaves four samples per semidiurnal
-  cycle, and the dispatcher's linear interpolation back to hourly then underestimates the tide
-  between samples by up to about 30 percent. Velocities, temperature and salinity are published
-  only 3-hourly. Keeping ``zeta`` hourly and recording tidal content in the store's attributes
-  is planned.
+.. list-table::
+   :header-rows: 1
+   :widths: 20 80
+
+   * - ``tides``
+     - Window
+   * - ``"none"``
+     - Entirely before 2024-09-05 (GLB experiments).
+   * - ``"included"``
+     - Entirely from 2024-09-05 (ESPC-D-V02).
+   * - ``"mixed"``
+     - Spans 2024-09-05: non-tidal before the switch, tidal after it. The fetcher also logs a
+       warning.
+
+Two consequences:
+
+- **Do not add tides twice.** A tidal parent (``tides = "included"``) already carries the tide
+  in ``zeta`` and in the currents. A downstream model that adds its own tidal boundary forcing
+  (harmonic constituents from TPXO, FES or similar) should do so only when ``tides`` is
+  ``"none"``; adding it to a tidal parent doubles the tide. A ``"mixed"`` window has no single
+  correct treatment and is best split at 2024-09-05 or avoided.
+- **Tidal sampling.** ESPC-D-V02's ``zeta`` is kept at its native hourly steps (step 3 below),
+  and the dispatcher's hourly resample leaves those values unchanged. Velocities, temperature
+  and salinity are published only 3-hourly, so the tidal currents are sampled four times per
+  semidiurnal cycle and linearly interpolated to hourly in between, which flattens their peaks
+  by up to about 30 percent.
 
 Where the data lives
 --------------------
@@ -153,9 +172,13 @@ How forcingkit reads it
    dataset's own convention (-180..180 or 0..360, detected per dataset); a box that crosses the
    dataset's seam is read in two parts. Only the five fields above are downloaded.
 3. **ESPC-D-V02 merge.** The five per-field datasets are read separately and merged on the
-   times they share, so hourly ``zeta`` is reduced to the 3-hourly steps.
+   union of their times, so ``zeta`` keeps its hourly steps and ``u``, ``v``, ``temp`` and
+   ``salt`` are NaN at the two hours between their 3-hourly steps. Times outside the span that
+   all five fields share are dropped, so no field begins or ends on a step it has no data for.
 4. **Clean-up.** Longitudes are returned on 0..360 for every experiment. Times are sorted,
-   duplicates dropped, and decoded to datetimes.
+   duplicates dropped, decoded to datetimes and rounded to the second (ESPC-D-V02 ``ssh``
+   decodes a few hundred nanoseconds off the hour, which would otherwise keep its steps apart
+   from those of the other fields in step 3).
 5. **Stitch.** Pieces from different experiments are concatenated in time. A piece on a
    different grid is interpolated (bilinear) onto the grid of the first piece. The step at a
    switch is read from both experiments; the newer one's copy is kept.
@@ -165,9 +188,12 @@ How forcingkit reads it
    data in a dataset's time range is not retried.
 
 Output is a Dataset with ``u``, ``v``, ``temp``, ``salt`` (``time, depth, lat, lon``) and
-``zeta`` (``time, lat, lon``). Land and cells below the sea floor are NaN. The dispatcher then
-resamples to hourly by linear interpolation, casts to Float32, and writes the store with
-``schema = "legacy"``.
+``zeta`` (``time, lat, lon``), and the ``tides`` attribute (see `Tides`_). Land and cells below
+the sea floor are NaN. The time axis is 3-hourly for GLB experiments and hourly for ESPC-D-V02,
+where only ``zeta`` has data at every step. The dispatcher then resamples to hourly by linear
+interpolation, each variable from the steps at which it has data (so the 3-hourly fields are
+bridged between their own steps and hourly ``zeta`` is kept as is), casts to Float32, and
+writes the store with ``schema = "legacy"``.
 
 Known issues
 ~~~~~~~~~~~~
@@ -212,16 +238,21 @@ these returned all five fields on 10 x 5 cells and 40 depths:
    * - 2018-12-03 18:00, 12 h
      - GLBv0.08 ``expt_93.0``
      - 5 steps, in 12 s.
-   * - 2026-10-01 00:00, 6 h
+   * - 2026-10-01 00:00, 24 h
      - ESPC-D-V02 (five datasets)
-     - 3 steps, in 216 s; ``zeta`` reduced from hourly to 3-hourly.
+     - 25 hourly steps, ``zeta`` at all 25 and the other fields at 9, in 547 s (one read
+       retried); ``tides = "included"``. After the dispatcher's resample, ``zeta`` was
+       unchanged (a tidal range of about 0.8 m at one cell) and the surface ``u`` had no
+       gaps.
    * - 2018-12-04 06:00, 12 h
      - GLBv0.08 then GLBy0.08 ``expt_93.0``
      - 5 steps, in 367 s; 12:00 read from both, kept once.
    * - 2024-09-04 18:00, 12 h
      - GLBy0.08 ``expt_93.0`` then ESPC-D-V02
-     - 5 steps, in 334 s. ESPC-D-V02 marks a few more cells as land or below the sea floor
-       than GLBy0.08 in this box.
+     - 9 steps (3-hourly to 2024-09-05 00:00, then hourly), 13 after the dispatcher's
+       resample, in 623 s (one read retried); ``tides = "mixed"`` and the crossing warning
+       logged. An earlier attempt failed after two timeouts on ``v3z``. ESPC-D-V02 marks a
+       few more cells as land or below the sea floor than GLBy0.08 in this box.
 
 The times are for windows of 6 to 12 hours; multi-day windows have not been timed. Most of the
 time goes to per-request latency on the server rather than to data volume, so a longer window
@@ -232,8 +263,10 @@ Tests
 
 - ``tests/unit/test_hycom.py``: experiment resolution and window splitting at every switch,
   the URLs for GLBv0.08 and the ESPC-D-V02 fields, stitching across 2018-12-04 (regridding and
-  the duplicated switch step) and across 2024-09-05 (merged ESPC-D-V02 fields), the all or
-  nothing rule, the retry after a failed read (and none for an empty time range), both
+  the duplicated switch step) and across 2024-09-05 (merged ESPC-D-V02 fields), hourly ``zeta``
+  in the ESPC-D-V02 merge and through the dispatcher's hourly resample, trimming to the span
+  all fields share, rounding decoded times to the second, the ``tides`` attribute and the warning for a window across 2024-09-05, the
+  all or nothing rule, the retry after a failed read (and none for an empty time range), both
   longitude conventions and the seam, and the non-monotonic time axis. No network.
 
 .. code-block:: bash

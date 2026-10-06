@@ -34,6 +34,8 @@ class _Segment:
     name: str
     # One aggregated dataset, or one dataset per variable to be merged.
     urls: tuple[str, ...]
+    # Whether the experiment's sea surface height and currents contain the tide.
+    tidal: bool = False
 
 
 def _glb(path: str, start: str) -> _Segment:
@@ -57,7 +59,11 @@ def _glb(path: str, start: str) -> _Segment:
 # - Time. All use "hours since 2000-01-01 00:00:00", 3-hourly, with occasional gaps of up to
 #   51 h that are passed through unfilled. GLBv0.08/expt_93.0 steps back once.
 # - ESPC-D-V02 serves u, v, temperature and salinity (3-hourly) and surface elevation (hourly)
-#   as separate datasets, merged on the shared 3-hourly times.
+#   as separate datasets. They are merged on the union of their times, so surface elevation
+#   stays hourly and the other fields are NaN between their 3-hourly steps.
+# - Tides. The GLB experiments are run without tidal forcing; ESPC-D-V02 includes the tide
+#   (about 0.43 m semidiurnal amplitude south of Long Island against about 5 cm of non-tidal
+#   variation in GLBy0.08/expt_93.0). The record therefore turns tidal on 2024-09-05.
 _SEGMENTS: tuple[_Segment, ...] = (
     _glb("GLBv0.08/expt_53.X", "1994-01-01"),
     _glb("GLBv0.08/expt_56.3", "2015-12-31"),
@@ -73,6 +79,7 @@ _SEGMENTS: tuple[_Segment, ...] = (
         tuple(
             f"{_TDS}/ESPC-D-V02/{var}" for var in ("u3z", "v3z", "t3z", "s3z", "ssh")
         ),
+        tidal=True,
     ),
 )
 
@@ -122,6 +129,16 @@ def _split_window(
     return pieces
 
 
+def _tides(pieces: list[tuple[_Segment, pd.Timestamp, pd.Timestamp]]) -> str:
+    """Tidal content of a window: "included", "none", or "mixed" across a switch."""
+    tidal = {seg.tidal for seg, _, _ in pieces}
+    if tidal == {True}:
+        return "included"
+    if tidal == {False}:
+        return "none"
+    return "mixed"
+
+
 def _normalize_lons(lons: np.ndarray) -> np.ndarray:
     """Convert -180/180 to 0/360."""
     return np.where(lons < 0, lons + 360, lons)
@@ -149,6 +166,15 @@ def fetch_hycom_boundary_conditions(
         names = ", ".join(seg.name for seg, _, _ in pieces)
         logger.info(f"Hindcast spans HYCOM experiments; stitching {names}...")
 
+    tides = _tides(pieces)
+    if tides == "mixed":
+        switch = next(seg.start for seg, _, _ in pieces if seg.tidal)
+        logger.warning(
+            f"HYCOM window {start_dt} to {end_dt} crosses {switch}, where the record changes "
+            "from non-tidal (GLB experiments) to tidal (ESPC-D-V02); sea surface height and "
+            "currents gain the tide part way through."
+        )
+
     parts = []
     for seg, piece_start, piece_end in pieces:
         part = _fetch_segment(seg, piece_start, piece_end, bbox)
@@ -160,9 +186,9 @@ def fetch_hycom_boundary_conditions(
             return None
         parts.append(part)
 
-    if len(parts) == 1:
-        return parts[0]
-    return _stitch(parts)
+    ds = parts[0] if len(parts) == 1 else _stitch(parts)
+    ds.attrs["tides"] = tides
+    return ds
 
 
 def _fetch_segment(
@@ -180,9 +206,13 @@ def _fetch_segment(
         parts.append(part)
     if len(parts) == 1:
         return parts[0]
-    # The inner join keeps the 3-hourly times common to all variables (surface elevation is
-    # hourly).
-    return xr.merge(parts, join="inner")
+    # Surface elevation is hourly and the other fields 3-hourly. The outer join keeps every
+    # time, leaving the 3-hourly fields NaN in between (the dispatcher interpolates each field
+    # from its own steps). Times outside the span all fields share are dropped, so no field
+    # starts or ends with a step it has no data for.
+    first = max(part.indexes["time"][0] for part in parts)
+    last = min(part.indexes["time"][-1] for part in parts)
+    return xr.merge(parts, join="outer").sel(time=slice(first, last))
 
 
 def _stitch(parts: list[xr.Dataset]) -> xr.Dataset:
@@ -309,10 +339,13 @@ def _read_hycom_data(
     actual_rename = {k: v for k, v in _RENAME.items() if k in ds_subset.data_vars}
     ds_subset = ds_subset.rename(actual_rename)
 
-    # Explicitly decode the raw float time coordinate to pandas DatetimeIndex lengths
+    # Explicitly decode the raw float time coordinate to pandas DatetimeIndex lengths.
+    # ESPC-D-V02 `ssh` decodes a few hundred nanoseconds off the hour (01:00 as
+    # 00:59:59.999999791, read 2026-10-06); rounding to the second keeps its steps equal to
+    # those of the 3-hourly fields it is merged with.
     if time_var in ds_subset.coords:
-        ds_subset[time_var] = epoch + pd.to_timedelta(
-            ds_subset[time_var].values, unit="h"
-        )
+        ds_subset[time_var] = (
+            epoch + pd.to_timedelta(ds_subset[time_var].values, unit="h")
+        ).round("s")
 
     return ds_subset

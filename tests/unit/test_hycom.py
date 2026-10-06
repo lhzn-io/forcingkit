@@ -1,9 +1,12 @@
+import logging
+
 import xarray as xr
 import pandas as pd
 import numpy as np
 import pytest
 from unittest.mock import patch
 
+from forcingkit.dispatcher import _resample_hourly
 from forcingkit.fetchers.hycom import (
     _SEGMENTS,
     _fetch_hycom_data,
@@ -125,8 +128,16 @@ def test_hycom_historical_stitch():
     assert not np.isnan(ds["u"].values).any()
 
 
+def _three_hourly(ds, var):
+    """Whether `var` has data exactly at the 3-hourly steps of `ds` and NaN in between."""
+    on_step = ds.indexes["time"].hour % 3 == 0
+    has_data = ds[var].notnull().any([d for d in ds[var].dims if d != "time"]).values
+    return bool((has_data == on_step).all())
+
+
 def test_espc_merges_per_variable_datasets():
-    """ESPC-D-V02 fetches each variable separately and keeps the 3-hourly common times."""
+    """ESPC-D-V02 fetches each variable separately; zeta keeps its hourly steps and the
+    3-hourly fields are NaN between theirs."""
     with patch("forcingkit.fetchers.hycom._fetch_hycom_data") as mock_fetch:
         mock_fetch.side_effect = _espc("2025-03-01", 48)
         ds = fetch_hycom_boundary_conditions("2025-03-01", 48, BBOX)
@@ -136,22 +147,99 @@ def test_espc_merges_per_variable_datasets():
     ]
     assert set(ds.data_vars) == {"u", "v", "temp", "salt", "zeta"}
     assert ds.indexes["time"].equals(
-        pd.date_range("2025-03-01", "2025-03-03", freq="3h")
+        pd.date_range("2025-03-01", "2025-03-03", freq="h")
     )
     assert not np.isnan(ds["zeta"].values).any()
+    for var in ("u", "v", "temp", "salt"):
+        assert _three_hourly(ds, var)
+    assert ds.attrs["tides"] == "included"
 
 
-def test_stitch_across_espc_switch():
-    """A window across 2024-09-05 stitches GLBy0.08/expt_93.0 with merged ESPC-D-V02."""
-    start_date = "2024-09-04"
+def test_espc_trims_to_shared_span():
+    """Hourly zeta past the last 3-hourly step is dropped, so no field ends on a step it has
+    no data for."""
+    parts = _espc("2025-03-01", 48)
+    parts[-1] = _ds("2025-02-28 23:00", 51, freq="h", var="zeta", depth=False)
     with patch("forcingkit.fetchers.hycom._fetch_hycom_data") as mock_fetch:
+        mock_fetch.side_effect = parts
+        ds = fetch_hycom_boundary_conditions("2025-03-01", 48, BBOX)
+    assert ds.indexes["time"][0] == pd.Timestamp("2025-03-01")
+    assert ds.indexes["time"][-1] == pd.Timestamp("2025-03-03")
+
+
+def test_glb_window_is_not_tidal(caplog):
+    with (
+        patch("forcingkit.fetchers.hycom._fetch_hycom_data") as mock_fetch,
+        caplog.at_level(logging.WARNING, logger="forcingkit.fetchers.hycom"),
+    ):
+        mock_fetch.side_effect = [_glb("2024-09-01", 9)]
+        ds = fetch_hycom_boundary_conditions("2024-09-01", 24, BBOX)
+    assert ds.attrs["tides"] == "none"
+    assert not caplog.records
+
+
+def test_stitch_across_espc_switch(caplog):
+    """A window across 2024-09-05 stitches GLBy0.08/expt_93.0 with merged ESPC-D-V02, is
+    marked as mixed and logs a warning."""
+    start_date = "2024-09-04"
+    with (
+        patch("forcingkit.fetchers.hycom._fetch_hycom_data") as mock_fetch,
+        caplog.at_level(logging.WARNING, logger="forcingkit.fetchers.hycom"),
+    ):
         mock_fetch.side_effect = [_glb(start_date, 9), *_espc("2024-09-05", 24)]
         ds = fetch_hycom_boundary_conditions(start_date, 48, BBOX)
 
     assert mock_fetch.call_count == 6
     assert set(ds.data_vars) == {"u", "v", "temp", "salt", "zeta"}
-    assert ds.indexes["time"].equals(pd.date_range(start_date, "2024-09-06", freq="3h"))
+    # 3-hourly before the switch, hourly after it.
+    expected = pd.date_range(start_date, "2024-09-05", freq="3h").append(
+        pd.date_range("2024-09-05 01:00", "2024-09-06", freq="h")
+    )
+    assert ds.indexes["time"].equals(expected)
     assert not np.isnan(ds["zeta"].values).any()
+    assert _three_hourly(ds, "u")
+    assert ds.attrs["tides"] == "mixed"
+    [record] = caplog.records
+    assert record.levelno == logging.WARNING
+    assert "2024-09-05" in record.getMessage() and "tidal" in record.getMessage()
+
+
+def test_resample_keeps_hourly_zeta():
+    """The dispatcher's hourly resample keeps hourly zeta at its native values and
+    interpolates the 3-hourly fields between their own steps. Treating the gaps as data
+    would leave the 3-hourly fields NaN at two hours in three."""
+    hours = np.arange(25)
+    time = pd.date_range("2025-03-01", periods=hours.size, freq="h")
+    # An M2 tide, which 3-hourly sampling and linear interpolation would flatten.
+    tide = 0.43 * np.sin(2 * np.pi * hours / 12.42)
+    u = np.where(hours % 3 == 0, hours.astype(float), np.nan)
+    land = np.full(hours.size, np.nan)
+    ds = xr.Dataset(
+        {
+            "zeta": (("time", "lat"), np.stack([tide, land], axis=1)),
+            "u": (("time", "lat"), np.stack([u, land], axis=1)),
+            "h": (("lat",), [10.0, 0.0]),
+        },
+        coords={"time": time, "lat": [40.0, 40.1]},
+        attrs={"tides": "included"},
+    )
+    out = _resample_hourly(ds)
+
+    assert out.indexes["time"].equals(time)
+    np.testing.assert_allclose(out["zeta"].values[:, 0], tide)
+    np.testing.assert_allclose(out["u"].values[:, 0], hours)
+    assert np.isnan(out["u"].values[:, 1]).all()
+    assert out["h"].values.tolist() == [10.0, 0.0]
+    assert out.attrs["tides"] == "included"
+
+
+def test_resample_regular_input_unchanged():
+    """A dataset with one cadence resamples as `resample().interpolate()` does."""
+    ds = _glb("2025-03-01", 9)
+    ds["u"][:] = np.arange(9.0)[:, None, None, None]
+    out = _resample_hourly(ds)
+    ref = ds.resample(time="1h").interpolate("linear")
+    xr.testing.assert_allclose(out, ref)
 
 
 def test_missing_piece_drops_window():
@@ -218,6 +306,23 @@ def test_fetch_non_monotonic_time():
             f"{TDS}/GLBv0.08/expt_93.0",
         )
     expected = pd.date_range("2018-06-21 03:00", "2018-06-21 15:00", freq="3h")
+    assert ds.indexes["time"].equals(expected)
+
+
+def test_fetch_rounds_times_to_the_second():
+    """Float hours that decode a few hundred nanoseconds off the hour (as ESPC-D-V02 `ssh`
+    does) come back on whole seconds, so they align with the other fields in the merge."""
+    t0 = (pd.Timestamp("2025-01-01 12:00") - pd.Timestamp("2000-01-01")).total_seconds()
+    time = t0 / 3600 + np.arange(4.0) - np.array([0.0, 2e-13, 0.0, -2e-13]) * 3600
+    raw = _raw(np.arange(0.0, 360.0), time=time)
+    with patch("forcingkit.fetchers.hycom.xr.open_dataset", return_value=raw):
+        ds = _fetch_hycom_data(
+            pd.Timestamp("2025-01-01 12:00"),
+            pd.Timestamp("2025-01-01 15:00"),
+            BBOX,
+            f"{TDS}/ESPC-D-V02/ssh",
+        )
+    expected = pd.date_range("2025-01-01 12:00", periods=4, freq="h")
     assert ds.indexes["time"].equals(expected)
 
 

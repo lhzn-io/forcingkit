@@ -60,13 +60,16 @@ Parent ocean (``/api/v1/obc``)
        the present. The experiment follows the date: GLBv0.08 ``expt_53.X`` (reanalysis) to
        2015, a chain of GLBv0.08 analysis experiments to 2018-12-04, GLBy0.08 ``expt_93.0`` to
        2024-09-05, then ESPC-D-V02. A window that spans a switch is stitched; if any piece fails,
-       the whole window fails. Tidal only from 2024-09-05. Last-resort fallback; legacy output
-       layout.
+       the whole window fails. Tidal only from 2024-09-05, recorded in the store's ``tides``
+       attribute (``"none"``, ``"included"`` or ``"mixed"``). Last-resort fallback; legacy
+       output layout.
 
 `TPXO10 <https://www.tpxo.net/>`__ tidal harmonics are a roadmap item, not integrated; the
 `pyTMD <https://github.com/pyTMD/pyTMD>`__ dependency was removed on
 2026-10-05. The ``include_tides`` and ``tidal_model`` request fields
 are still accepted and form part of the cache key, but no tide is added to the parent store.
+A parent that already contains the tide (a HYCOM store with ``tides = "included"``) should not
+have tides added again downstream; see :doc:`hycom`.
 
 Donor selection
 ~~~~~~~~~~~~~~~

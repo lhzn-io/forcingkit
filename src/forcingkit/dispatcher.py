@@ -1,8 +1,11 @@
 import os
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 import numpy as np
 from forcingkit import settings
+
+if TYPE_CHECKING:
+    import xarray as xr
 
 
 logger = logging.getLogger(__name__)
@@ -262,8 +265,7 @@ def dispatch_obc_request(
                 ds["time"] = ds.indexes["time"].to_datetimeindex()
             except AttributeError:
                 ds["time"] = pd.to_datetime(ds.indexes["time"].values)
-        # Interpolate to strictly hourly
-        ds = ds.resample(time="1h").interpolate("linear")
+        ds = _resample_hourly(ds)
 
     # REQ-1.3: Tidal boundary condition integration via GOT4.10c or EOT20 (pyTMD).
 
@@ -308,6 +310,34 @@ def dispatch_obc_request(
 
 
 _FULL_PRECISION_COORDS = ("lat", "lon", "z", "z_face")
+
+
+def _resample_hourly(ds: "xr.Dataset") -> "xr.Dataset":
+    """Linearly interpolate every time-dependent variable onto an hourly axis.
+
+    Variables may arrive at different cadences on one time axis: HYCOM ESPC-D-V02 has hourly
+    surface elevation and 3-hourly currents, temperature and salinity, which are NaN at the
+    hours in between. Each variable is therefore interpolated from the times at which it has
+    any data, so a coarser field is bridged between its own steps and a finer one keeps its
+    native values. A single `resample().interpolate()` would treat those NaNs as data.
+    """
+    import pandas as pd
+
+    times = ds.indexes["time"]
+    hourly = pd.date_range(times.min().floor("h"), times.max().floor("h"), freq="h")
+    out = ds.drop_dims("time").assign_coords(time=hourly)
+    for name, da in ds.data_vars.items():
+        if "time" not in da.dims:
+            continue
+        others = [d for d in da.dims if d != "time"]
+        valid = (da.notnull().any(others) if others else da.notnull()).values
+        da = da.isel(time=valid)
+        out[name] = (
+            da.interp(time=hourly, assume_sorted=True)
+            if da.sizes["time"] > 1
+            else da.reindex(time=hourly)
+        )
+    return out[list(ds.data_vars)]
 
 
 def atmosphere_key(
