@@ -8,6 +8,10 @@ from forcingkit import settings
 logger = logging.getLogger(__name__)
 
 
+# Water-level datums to request, in order of preference.
+TIDE_DATUMS = ("NAVD", "MSL")
+
+
 def fetch_noaa_tide_data(
     station_id: str,
     start_time: str,
@@ -57,7 +61,6 @@ def fetch_noaa_tide_data(
         "end_date": end_str,
         "station": station_id,
         "product": "water_level",
-        "datum": "NAVD",
         "units": "metric",
         "time_zone": "gmt",
         "format": "json",
@@ -65,16 +68,30 @@ def fetch_noaa_tide_data(
     }
 
     try:
-        response = requests.get(url, params=params, timeout=30)
-        response.raise_for_status()
-        data = response.json()
+        # NAVD88 where the station has it, so stations share a datum; otherwise MSL (New Haven,
+        # 8465705, publishes only tidal datums). The datum used is recorded in the metadata.
+        for datum in TIDE_DATUMS:
+            response = requests.get(url, params={**params, "datum": datum}, timeout=30)
+            data = response.json() if response.content else {}
+            message = (
+                data.get("error", {}).get("message", "")
+                if isinstance(data, dict)
+                else ""
+            )
+            if "datum" in message.lower() and datum != TIDE_DATUMS[-1]:
+                logger.info(
+                    f"NOAA station {station_id} has no {datum} datum; trying the next"
+                )
+                continue
+            response.raise_for_status()
+            break
 
         if "error" in data:
             logger.warning(
                 f"NOAA API returned error: {data['error'].get('message', 'Unknown error')}"
             )
-            # Return a dummy fallback or raise? For now, we'll raise to let dispatcher handle it
             raise RuntimeError(f"NOAA API Error: {data['error'].get('message')}")
+        data.setdefault("metadata", {})["datum"] = datum
 
         # Cache the successful response
         with open(cache_path, "w") as f:
