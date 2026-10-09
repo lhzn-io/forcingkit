@@ -73,6 +73,23 @@ Planned work
        hindcasts (:doc:`atmospheric_forcing`).
    * - Cache policy
      - Invalidate stores built from forecasts when the upstream system publishes a newer cycle.
+   * - A second global parent
+     - HYCOM is the only parent ocean for current dates outside the US Northeast, and its server
+       (``tds.hycom.org``) often stalls past the read timeout (:doc:`hycom`). Copernicus GLO12
+       (see `Global parent ocean`_) would give an independent fallback for 2020-11-01 on.
+   * - Warn on gaps in a donor's record
+     - Every HYCOM experiment has a few gaps of up to 51 hours in its 3-hourly record, and the
+       hourly resampling bridges them by linear interpolation without notice. Log a warning,
+       and record the gap in the store's attributes, when a window contains a step longer than
+       about 6 hours.
+   * - HYCOM fetcher clean-up
+     - Remove the unused ``_normalize_lons``. Select the initial-condition time by position, as
+       the boundary path does: the nearest-label lookup fails on the non-monotonic time axis of
+       GLBv0.08 ``expt_93.0``.
+   * - mypy hook without an active environment
+     - The ``mypy`` pre-commit hook runs the ``mypy`` on ``PATH``, so a commit made without the
+       project environment activated fails with "Executable ``mypy`` not found". Run it through
+       ``uv run`` so it works from any shell.
 
 Candidate sources: coverage
 ---------------------------
