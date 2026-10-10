@@ -589,6 +589,114 @@ def download_atmosphere(zarr_id: str):
     )
 
 
+class SatelliteRequest(BaseModel):
+    bbox: BoundingBox
+    quantity: (
+        str  # "sst", "chlor_a", "kd_490" or "spm" (see fetchers.satellite.QUANTITIES)
+    )
+    end_time: str | None = None  # ISO 8601, UTC; default now
+    days: int = 7
+    coast_pixels: int = 1
+    cache_bust: bool = False
+
+
+def _satellite_cache_dir() -> str:
+    return settings.cache_dir("satellite")
+
+
+def _satellite_retention_days() -> float:
+    return float(settings.env("FORCINGKIT_SATELLITE_RETENTION_DAYS", "30") or 30)
+
+
+@app.post("/api/v1/satellite")
+def get_satellite(request: SatelliteRequest) -> Dict[str, Any]:
+    """A satellite surface field over the bbox: each pixel's most recent valid value across the quantity's sensors
+    within `days` of `end_time`, with its age, a band of `coast_pixels` masked along the shore, as a Zarr store.
+
+    Stores older than FORCINGKIT_SATELLITE_RETENTION_DAYS (default 30) are pruned on every request, so the cache
+    stays bounded.
+    """
+    import json
+    from datetime import datetime, timezone
+
+    import pandas as pd
+
+    from forcingkit.fetchers import satellite
+
+    products = satellite.QUANTITIES.get(request.quantity)
+    if products is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"quantity must be one of {sorted(satellite.QUANTITIES)}",
+        )
+    if not 1 <= request.days <= 31:
+        raise HTTPException(status_code=400, detail="days must be 1 to 31")
+    end = (
+        pd.Timestamp(request.end_time).to_pydatetime()
+        if request.end_time
+        else datetime.now(timezone.utc)
+    )
+    bbox_list = [
+        request.bbox.min_lon,
+        request.bbox.min_lat,
+        request.bbox.max_lon,
+        request.bbox.max_lat,
+    ]
+    cache_dir = _satellite_cache_dir()
+    os.makedirs(cache_dir, exist_ok=True)
+    satellite.prune_cache(cache_dir, _satellite_retention_days())
+    zarr_id = satellite.cache_key(
+        products, bbox_list, end, request.days, request.coast_pixels
+    )
+    zarr_path = os.path.join(cache_dir, f"{zarr_id}.zarr")
+    if request.cache_bust or not os.path.isdir(zarr_path):
+        try:
+            ds = satellite.mask_coast(
+                satellite.composite(products, bbox_list, end, request.days),
+                request.coast_pixels,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except Exception as e:
+            logger.error(f"Satellite delivery failed: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+        shutil.rmtree(zarr_path, ignore_errors=True)
+        ds.to_zarr(zarr_path, mode="w", zarr_format=2)
+    import xarray as xr
+
+    ds = xr.open_zarr(zarr_path)
+    valid = ds["value"].notnull()
+    return {
+        "status": "success",
+        "zarr_id": zarr_id,
+        "zarr_path": zarr_path,
+        "download_url": f"/api/v1/satellite/download/{zarr_id}",
+        "products": str(ds.attrs.get("products", "")).split(","),
+        "attribution": ds.attrs.get("attribution", ""),
+        "valid_share": float(valid.mean()),
+        "age_days_median": float(ds["age_days"].where(valid).median())
+        if bool(valid.any())
+        else None,
+        "attrs": json.loads(json.dumps(dict(ds.attrs), default=str)),
+    }
+
+
+@app.get("/api/v1/satellite/download/{zarr_id}")
+def download_satellite(zarr_id: str):
+    if not (zarr_id.startswith("sat_") and zarr_id[4:].isalnum()):
+        raise HTTPException(status_code=400, detail="invalid store id")
+    cache_dir = _satellite_cache_dir()
+    zarr_path = os.path.join(cache_dir, f"{zarr_id}.zarr")
+    if not os.path.isdir(zarr_path):
+        raise HTTPException(status_code=404, detail="Satellite Zarr store not found.")
+    zip_path = os.path.join(cache_dir, f"{zarr_id}.zip")
+    if _zip_is_stale(zip_path, zarr_path):
+        shutil.make_archive(zip_path.replace(".zip", ""), "zip", zarr_path)
+    return FileResponse(
+        zip_path, media_type="application/zip", filename=f"{zarr_id}.zip"
+    )
+
+
 if __name__ == "__main__":
     import uvicorn
     import argparse

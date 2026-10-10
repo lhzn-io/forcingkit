@@ -180,3 +180,12 @@ def test_restrict_masks_element_fields_on_land():
     interp = Barycentric(Delaunay(pts), targets, (2,)).restrict(np.array([True, False]))
     out = interp(np.array([1.0, 1.0, 1.0, 1.0]))
     assert out[0] == 1.0 and np.isnan(out[1])
+
+
+def test_index_runs_merge_small_gaps_and_split_large_ones():
+    from forcingkit.fetchers.necofs import _index_runs
+
+    idx = np.array([5, 6, 7, 100, 101, 5000, 5001])
+    assert _index_runs(idx, max_gap=200) == [(5, 101), (5000, 5001)]
+    assert _index_runs(idx, max_gap=1) == [(5, 7), (100, 101), (5000, 5001)]
+    assert _index_runs(np.array([], dtype=int)) == []

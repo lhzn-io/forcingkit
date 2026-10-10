@@ -412,3 +412,119 @@ def fetch_necofs_boundary_conditions(
     for name, (unit, standard_name) in PARENT_UNITS.items():
         ds_out[name].attrs.update(units=unit, standard_name=standard_name)
     return ds_out
+
+
+def _index_runs(idx: np.ndarray, max_gap: int = 2048) -> list[tuple[int, int]]:
+    """Contiguous runs [start, stop] covering sorted `idx`, merging gaps up to `max_gap`.
+
+    An OPeNDAP subset reads one hyperslab per run: a few slabs (a little extra data) are far faster than one
+    request per element, and far smaller than the whole mesh.
+    """
+    runs: list[tuple[int, int]] = []
+    for i in np.asarray(idx, dtype=np.int64):
+        if runs and i - runs[-1][1] <= max_gap:
+            runs[-1] = (runs[-1][0], int(i))
+        else:
+            runs.append((int(i), int(i)))
+    return runs
+
+
+def read_surface(
+    bbox: list[float],
+    start_time: str | pd.Timestamp,
+    hours: int,
+    dap_url: str | None = None,
+) -> xr.Dataset:
+    """Surface currents on the FVCOM mesh itself (no regridding, no vertical conversion), for the elements whose
+    centres lie in `bbox` = [min_lon, min_lat, max_lon, max_lat], hourly from `start_time` for `hours`.
+
+    Returns dims (time, element, node, vertex): `u`, `v` (time, element; m/s, top sigma layer), `lonc`, `latc`
+    (element centres), `triangles` (element, vertex; indices into the returned nodes), `node_lon`, `node_lat`. For
+    a map or a quick look at the flow; boundary forcing should use `iter_parent`. Reads the rolling GOM7 forecast
+    unless `dap_url` names another file (for example an archive day from `get_necofs_url`).
+    """
+    url = dap_url or NECOFS_GOM7_URL
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ds_raw = xr.open_dataset(url, engine="pydap", decode_times=False)
+    drop_vars = [v for v in ["Itime", "Itime2"] if v in ds_raw.variables]
+    ds = xr.decode_cf(ds_raw.drop_vars(drop_vars))
+    times = pd.DatetimeIndex(ds.time.values)
+    if times.tz is not None:
+        times = times.tz_convert("UTC").tz_localize(None)
+
+    min_lon, min_lat, max_lon, max_lat = bbox
+    lonc = np.asarray(ds["lonc"].values, dtype=np.float64)
+    latc = np.asarray(ds["latc"].values, dtype=np.float64)
+    elems = np.flatnonzero(
+        (lonc >= min_lon) & (lonc <= max_lon) & (latc >= min_lat) & (latc <= max_lat)
+    )
+    if elems.size == 0:
+        raise ValueError(f"No NECOFS elements inside {bbox}")
+    nv = (
+        np.asarray(ds["nv"].values).T.astype(np.int64) - 1
+    )  # (element, 3), zero-based node indices
+    tri_global = nv[elems]
+    nodes, tri_local = np.unique(tri_global, return_inverse=True)
+    tri_local = tri_local.reshape(tri_global.shape).astype(np.int32)
+
+    start = pd.Timestamp(start_time)
+    start = start.tz_convert("UTC").tz_localize(None) if start.tzinfo else start
+    wanted = pd.date_range(start.floor("h"), periods=hours, freq="1h")
+    t_idx = times.get_indexer(wanted)
+    keep = t_idx >= 0
+    if not keep.any():
+        raise RuntimeError(
+            f"{url} holds {times[0]} to {times[-1]}, none of {wanted[0]} to {wanted[-1]}"
+        )
+    t_idx, wanted = t_idx[keep], wanted[keep]
+    t0, t1 = int(t_idx.min()), int(t_idx.max())
+
+    u = np.empty((len(wanted), elems.size), dtype=np.float32)
+    v = np.empty_like(u)
+    col = 0
+    for a, b in _index_runs(elems):
+        sel = elems[(elems >= a) & (elems <= b)]
+        slab = {"time": slice(t0, t1 + 1), "siglay": 0, "nele": slice(a, b + 1)}
+        us = np.asarray(ds["u"].isel(slab).values)[t_idx - t0][:, sel - a]
+        vs = np.asarray(ds["v"].isel(slab).values)[t_idx - t0][:, sel - a]
+        u[:, col : col + sel.size] = us
+        v[:, col : col + sel.size] = vs
+        col += sel.size
+    logger.info(
+        f"NECOFS surface: {elems.size} elements, {len(wanted)} hours from {url}"
+    )
+
+    return xr.Dataset(
+        {
+            "u": (
+                ("time", "element"),
+                u,
+                {"units": "m s-1", "long_name": "eastward current, top sigma layer"},
+            ),
+            "v": (
+                ("time", "element"),
+                v,
+                {"units": "m s-1", "long_name": "northward current, top sigma layer"},
+            ),
+            "lonc": (("element",), lonc[elems].astype(np.float32)),
+            "latc": (("element",), latc[elems].astype(np.float32)),
+            "triangles": (("element", "vertex"), tri_local),
+            "node_lon": (
+                ("node",),
+                np.asarray(ds["lon"].values)[nodes].astype(np.float32),
+            ),
+            "node_lat": (
+                ("node",),
+                np.asarray(ds["lat"].values)[nodes].astype(np.float32),
+            ),
+            "element_id": (("element",), elems.astype(np.int64)),
+        },
+        coords={"time": wanted},
+        attrs={
+            "type": "NECOFS/FVCOM GOM7 surface currents on the model mesh",
+            "source": "UMass Dartmouth SMAST",
+            "url": url,
+            "requested_bbox": list(bbox),
+        },
+    )
