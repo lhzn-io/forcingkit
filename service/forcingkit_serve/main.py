@@ -592,7 +592,7 @@ def download_atmosphere(zarr_id: str):
 class SatelliteRequest(BaseModel):
     bbox: BoundingBox
     quantity: (
-        str  # "sst", "chlor_a", "kd_490" or "spm" (see fetchers.satellite.QUANTITIES)
+        str  # "sst", "chlor_a", "kd_490" or "spm" (see fetchers.coastwatch.QUANTITIES)
     )
     end_time: str | None = None  # ISO 8601, UTC; default now
     days: int = 7
@@ -621,13 +621,13 @@ def get_satellite(request: SatelliteRequest) -> Dict[str, Any]:
 
     import pandas as pd
 
-    from forcingkit.fetchers import satellite
+    from forcingkit.fetchers import coastwatch
 
-    products = satellite.QUANTITIES.get(request.quantity)
+    products = coastwatch.QUANTITIES.get(request.quantity)
     if products is None:
         raise HTTPException(
             status_code=400,
-            detail=f"quantity must be one of {sorted(satellite.QUANTITIES)}",
+            detail=f"quantity must be one of {sorted(coastwatch.QUANTITIES)}",
         )
     if not 1 <= request.days <= 31:
         raise HTTPException(status_code=400, detail="days must be 1 to 31")
@@ -644,15 +644,15 @@ def get_satellite(request: SatelliteRequest) -> Dict[str, Any]:
     ]
     cache_dir = _satellite_cache_dir()
     os.makedirs(cache_dir, exist_ok=True)
-    satellite.prune_cache(cache_dir, _satellite_retention_days())
-    zarr_id = satellite.cache_key(
+    coastwatch.prune_cache(cache_dir, _satellite_retention_days())
+    zarr_id = coastwatch.cache_key(
         products, bbox_list, end, request.days, request.coast_pixels
     )
     zarr_path = os.path.join(cache_dir, f"{zarr_id}.zarr")
     if request.cache_bust or not os.path.isdir(zarr_path):
         try:
-            ds = satellite.mask_coast(
-                satellite.composite(products, bbox_list, end, request.days),
+            ds = coastwatch.mask_coast(
+                coastwatch.composite(products, bbox_list, end, request.days),
                 request.coast_pixels,
             )
         except ValueError as e:

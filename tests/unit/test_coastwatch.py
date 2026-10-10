@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from forcingkit.fetchers import satellite
+from forcingkit.fetchers import coastwatch
 
 BBOX = [-73.0, 41.0, -72.97, 41.03]
 LAT_DESC = np.array(
@@ -83,15 +83,15 @@ class FakeERDDAP:
 def erddap(monkeypatch):
     def install(data):
         fake = FakeERDDAP(data)
-        monkeypatch.setattr(satellite.requests, "get", fake)
+        monkeypatch.setattr(coastwatch.requests, "get", fake)
         return fake
 
     return install
 
 
 def test_griddap_url_orders_descending_latitude_and_altitude():
-    p = satellite.PRODUCTS["chl_viirs_snpp"]
-    url = satellite.griddap_url(
+    p = coastwatch.PRODUCTS["chl_viirs_snpp"]
+    url = coastwatch.griddap_url(
         p,
         BBOX,
         datetime(2026, 10, 1, tzinfo=timezone.utc),
@@ -101,8 +101,8 @@ def test_griddap_url_orders_descending_latitude_and_altitude():
         "https://coastwatch.noaa.gov/erddap/griddap/noaacwNPPVIIRSchlaSectorVYDaily.nc?chlor_a"
     )
     assert "[(0.0)][(41.03):(41.0)][(-73.0):(-72.97)]" in url
-    mur = satellite.griddap_url(
-        satellite.PRODUCTS["sst_mur"],
+    mur = coastwatch.griddap_url(
+        coastwatch.PRODUCTS["sst_mur"],
         BBOX,
         datetime(2026, 10, 1),
         datetime(2026, 10, 2),
@@ -120,7 +120,7 @@ def test_fetch_normalizes_axes_and_trims_to_latest(erddap):
             )
         }
     )
-    ds = satellite.fetch(
+    ds = coastwatch.fetch(
         "chl_viirs_snpp",
         BBOX,
         datetime(2026, 10, 1, tzinfo=timezone.utc),
@@ -129,14 +129,14 @@ def test_fetch_normalizes_axes_and_trims_to_latest(erddap):
     assert ds["chlor_a"].dims == ("time", "lat", "lon")
     assert ds["chlor_a"].dtype == np.float32
     assert np.all(np.diff(ds["lat"].values) > 0)  # ascending
-    assert ds.attrs["attribution"] == satellite.NOAA_CREDIT
+    assert ds.attrs["attribution"] == coastwatch.NOAA_CREDIT
     # The window was trimmed to the latest time step before the subset request.
     assert "2026-10-06T18:00:00Z)]" in fake.urls[-1]
 
 
 def test_fetch_missing_dataset_returns_empty(erddap):
     erddap({})
-    ds = satellite.fetch(
+    ds = coastwatch.fetch(
         "chl_viirs_n20", BBOX, datetime(2026, 10, 1), datetime(2026, 10, 2)
     )
     assert ds.sizes["time"] == 0
@@ -154,7 +154,7 @@ def test_composite_keeps_most_recent_valid_pixel_with_age(erddap):
         }
     )
     end = datetime(2026, 10, 8, 12, tzinfo=timezone.utc)
-    c = satellite.composite(
+    c = coastwatch.composite(
         ["chl_viirs_snpp", "chl_viirs_n20", "chl_viirs_n21"], BBOX, end, days=7
     )
     value, age, src = c["value"].values, c["age_days"].values, c["product_index"].values
@@ -177,7 +177,7 @@ def test_composite_keeps_most_recent_valid_pixel_with_age(erddap):
 def test_composite_raises_when_nothing_valid(erddap):
     erddap({})
     with pytest.raises(ValueError):
-        satellite.composite(
+        coastwatch.composite(
             ["chl_viirs_snpp"], BBOX, datetime(2026, 10, 8, tzinfo=timezone.utc)
         )
 
@@ -193,7 +193,7 @@ def test_mask_coast_erodes_water_next_to_land():
         },
         coords={"lat": np.arange(5.0), "lon": np.arange(5.0)},
     )
-    m = satellite.mask_coast(ds, pixels=1)
+    m = coastwatch.mask_coast(ds, pixels=1)
     assert np.isnan(
         m["value"].values[:, 1]
     ).all()  # the water column beside land is masked
@@ -211,12 +211,12 @@ def test_prune_cache_removes_only_old_satellite_stores(tmp_path):
     long_ago = time.time() - 40 * 86400
     os.utime(old, (long_ago, long_ago))
     os.utime(other, (long_ago, long_ago))
-    assert satellite.prune_cache(str(tmp_path), max_age_days=30) == 1
+    assert coastwatch.prune_cache(str(tmp_path), max_age_days=30) == 1
     assert not old.exists() and fresh.exists() and other.exists()
 
 
 def test_cache_key_is_stable_within_the_hour():
-    a = satellite.cache_key(["sst_mur"], BBOX, datetime(2026, 10, 8, 12, 5), 7, 1)
-    b = satellite.cache_key(["sst_mur"], BBOX, datetime(2026, 10, 8, 12, 55), 7, 1)
-    c = satellite.cache_key(["sst_mur"], BBOX, datetime(2026, 10, 8, 13, 5), 7, 1)
+    a = coastwatch.cache_key(["sst_mur"], BBOX, datetime(2026, 10, 8, 12, 5), 7, 1)
+    b = coastwatch.cache_key(["sst_mur"], BBOX, datetime(2026, 10, 8, 12, 55), 7, 1)
+    c = coastwatch.cache_key(["sst_mur"], BBOX, datetime(2026, 10, 8, 13, 5), 7, 1)
     assert a == b != c and a.startswith("sat_")
