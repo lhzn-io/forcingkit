@@ -589,6 +589,118 @@ def download_atmosphere(zarr_id: str):
     )
 
 
+class RiverRequest(BaseModel):
+    bbox: BoundingBox
+    start_time: str  # ISO 8601, UTC
+    hours: int
+    max_gap_hours: int = 6
+    allow_climatology: bool = False
+    # Mouths to serve instead of the listed ones in the bbox: each {name, lon, lat} with
+    # optional comid or trace_from (the outlet), include / exclude (USGS site numbers) and
+    # lag_hours.
+    mouths: List[Dict[str, Any]] | None = None
+    # Gauges draining less than this share of the mouth's area are left out.
+    min_share: float = 0.01
+    # Leave out, rather than fail on, a river with no gauge record over the window.
+    skip_ungauged: bool = False
+    cache_bust: bool = False
+
+
+def _river_cache_dir() -> str:
+    return settings.cache_dir("rivers")
+
+
+@app.post("/api/v1/rivers")
+def generate_rivers(request: RiverRequest) -> Dict[str, Any]:
+    """Hourly discharge at each river mouth in the bbox (or each of `mouths`), for point sources
+    in an ocean model: the lowest tide-free USGS gauge on each branch, derived per request from
+    USGS NLDI and site metadata, summed and scaled by drainage area, from `start_time` to
+    `start_time + hours`, streamed to a Zarr store."""
+    import json
+
+    import zarr
+
+    from forcingkit.dispatcher import dispatch_river_request, river_key, river_mouths
+
+    if request.hours < 1:
+        raise HTTPException(status_code=400, detail="hours must be at least 1")
+    if request.max_gap_hours < 0:
+        raise HTTPException(status_code=400, detail="max_gap_hours must be at least 0")
+    if not 0 <= request.min_share < 1:
+        raise HTTPException(status_code=400, detail="min_share must be in [0, 1)")
+    bbox_list = [
+        request.bbox.min_lon,
+        request.bbox.min_lat,
+        request.bbox.max_lon,
+        request.bbox.max_lat,
+    ]
+    try:
+        mouths = river_mouths(bbox_list, request.mouths)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not mouths:
+        raise HTTPException(
+            status_code=400, detail=f"no listed river mouth lies in bbox {bbox_list}"
+        )
+    zarr_id = river_key(
+        bbox_list,
+        request.start_time,
+        request.hours,
+        request.max_gap_hours,
+        request.allow_climatology,
+        mouths,
+        request.min_share,
+        request.skip_ungauged,
+    )
+    os.makedirs(_river_cache_dir(), exist_ok=True)
+    zarr_path = os.path.join(_river_cache_dir(), f"{zarr_id}.zarr")
+    try:
+        final_path = dispatch_river_request(
+            bbox_list,
+            request.start_time,
+            request.hours,
+            zarr_path,
+            max_gap_hours=request.max_gap_hours,
+            allow_climatology=request.allow_climatology,
+            cache_bust=request.cache_bust,
+            mouths=mouths,
+            min_share=request.min_share,
+            skip_ungauged=request.skip_ungauged,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"River delivery failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    attrs = dict(zarr.open_group(final_path, mode="r", zarr_format=2).attrs)
+    return {
+        "status": "success",
+        "zarr_id": zarr_id,
+        "zarr_path": final_path,
+        "download_url": f"/api/v1/rivers/download/{zarr_id}",
+        "rivers": json.loads(str(attrs.get("provenance", "[]"))),
+        "provisional": bool(attrs.get("provisional", False)),
+        "skipped_rivers": json.loads(str(attrs.get("skipped_rivers", "[]"))),
+    }
+
+
+@app.get("/api/v1/rivers/download/{zarr_id}")
+def download_rivers(zarr_id: str):
+    search_id = zarr_id if zarr_id.startswith("riv_") else f"riv_{zarr_id}"
+    if not search_id[4:].isalnum():
+        raise HTTPException(status_code=400, detail="invalid store id")
+    cache_dir = _river_cache_dir()
+    zarr_path = os.path.join(cache_dir, f"{search_id}.zarr")
+    if not os.path.isdir(zarr_path):
+        raise HTTPException(status_code=404, detail="River Zarr store not found.")
+    zip_path = os.path.join(cache_dir, f"{search_id}.zip")
+    if _zip_is_stale(zip_path, zarr_path):
+        shutil.make_archive(zip_path.replace(".zip", ""), "zip", zarr_path)
+    return FileResponse(
+        zip_path, media_type="application/zip", filename=f"{search_id}.zip"
+    )
+
+
 class SatelliteRequest(BaseModel):
     bbox: BoundingBox
     quantity: (

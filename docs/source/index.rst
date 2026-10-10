@@ -17,13 +17,15 @@ and serves model-ready time series, with a record of where every value came from
 What it does
 ------------
 
-A regional ocean model needs two things from outside its own domain: the state of a larger
-"parent" ocean along its open boundaries, and the atmosphere above its surface. Both come from
+A regional ocean model needs three things from outside its own domain: the state of a larger
+"parent" ocean along its open boundaries, the atmosphere above its surface, and the rivers that
+flow into it. The first two come from
 operational and archive systems (NOAA's `HRRR <https://rapidrefresh.noaa.gov/hrrr/>`__, the NOAA
 `Operational Forecast Systems <https://tidesandcurrents.noaa.gov/models.html>`__,
 `NECOFS <https://fvcom.smast.umassd.edu/?p=20>`__, `HYCOM <https://www.hycom.org/>`__) that
 differ in grid type, vertical coordinate, time convention, file layout and access protocol, and
-that change those details without notice.
+that change those details without notice. River discharge comes from stream gauges, which
+measure flow upstream of the head of tide rather than at the mouth.
 
 forcingkit is a FastAPI service that sits between those providers and model codes such as
 `Oceananigans.jl <https://github.com/CliMA/Oceananigans.jl>`__ (for example through
@@ -61,6 +63,10 @@ What it serves
      - HRRR surface fields (10 m wind, 2 m temperature and humidity, pressure, radiation,
        precipitation) on a regular 0.03 degree grid, hourly, as schema ``hrrr-atm-v1``. See
        :doc:`atmospheric_forcing`.
+   * - ``POST /api/v1/rivers``
+     - Freshwater discharge at each listed river mouth in the box, hourly, from the tide-free
+       `USGS <https://waterdata.usgs.gov/>`__ stream gauges upstream (chosen per request) scaled
+       to the drainage area at the mouth, as schema ``river-v1``. See :doc:`rivers`.
    * - ``POST /api/v1/tide``
      - Observed water level at a `NOAA CO-OPS <https://tidesandcurrents.noaa.gov/>`__ station, for
        validation.
@@ -154,6 +160,7 @@ PyPI as ``forcingkit``.
    nyofs
    hycom
    atmospheric_forcing
+   rivers
 
 .. toctree::
    :maxdepth: 1

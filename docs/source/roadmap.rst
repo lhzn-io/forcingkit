@@ -1,9 +1,10 @@
 Roadmap and Contributing
 ========================
 
-As of 2026-10-06. This page covers the two kinds of forcing forcingkit delivers: the **parent
-ocean** for a model's open boundaries (``/api/v1/obc``) and the **surface atmosphere**
-(``/api/v1/atmosphere``). New sources are ranked by two questions:
+As of 2026-10-09. This page covers the kinds of forcing forcingkit delivers: the **parent
+ocean** for a model's open boundaries (``/api/v1/obc``), the **surface atmosphere**
+(``/api/v1/atmosphere``) and **river discharge** (``/api/v1/rivers``). New sources are ranked by
+two questions:
 
 1. **Coverage first.** Does it serve a region, or a span of years, that no current source does?
 2. **Resolution second.** Where something already serves, does it resolve the coast better?
@@ -44,6 +45,10 @@ Current coverage
      - Contiguous US (atmosphere)
      - 2014-07-30 on
      - 3 km
+   * - :doc:`USGS gauges <rivers>`
+     - Rivers into Long Island Sound (river discharge)
+     - 15-minute values online from about 2007; daily means fill in further back
+     - Five river mouths
 
 So today the only parent ocean outside the US Northeast is HYCOM, at 1/12 degree and in the
 legacy output layout, and there is no atmosphere outside the contiguous US: there, and before
@@ -86,10 +91,28 @@ Planned work
      - Remove the unused ``_normalize_lons``. Select the initial-condition time by position, as
        the boundary path does: the nearest-label lookup fails on the non-monotonic time axis of
        GLBv0.08 ``expt_93.0``.
+   * - River mouths for more regions, and found automatically
+     - :doc:`rivers` derives each river's gauges per request, so a new river needs only a mouth
+       entry. Mouths for the Hudson, Raritan and Delaware would cover the NY Bight and Delaware Bay
+       parents already served; finding coastal outlets in a box from NHDPlus would remove the
+       entries altogether.
+   * - Ungauged rivers
+     - Where no tide-free gauge exists, the `National Water Model
+       <https://water.noaa.gov/about/nwm>`__ retrospective and operational streamflow (on AWS)
+       could supply discharge at the outlet reach.
    * - mypy hook without an active environment
      - The ``mypy`` pre-commit hook runs the ``mypy`` on ``PATH``, so a commit made without the
        project environment activated fails with "Executable ``mypy`` not found". Run it through
        ``uv run`` so it works from any shell.
+   * - Fetcher module names
+     - Modules in ``forcingkit.fetchers`` are named for their source (``necofs``, ``hycom``,
+       ``ndbc``, ``coastwatch``, ``usgs``), and a model-ready delivery for the source and what it
+       delivers (``hrrr_atmosphere``, ``usgs_rivers``). Three predate the convention:
+       ``noaa.py`` serves CO-OPS water levels and current predictions (``coops.py``),
+       ``erddap.py`` serves the UConn profile stations (named for the protocol, not the source),
+       and ``hydrography.py`` finds heads of tide from OpenStreetMap (``osm.py`` or similar).
+       Renaming them breaks imports from earlier releases, so it belongs in a release that says
+       so, with the old names kept as deprecated aliases for one release.
 
 Candidate sources: coverage
 ---------------------------

@@ -415,6 +415,159 @@ def dispatch_atmosphere_request(
         raise
 
 
+PROVISIONAL_MAX_AGE_HOURS = 24
+
+
+def river_mouths(bbox: list[float], mouths: Optional[list[dict]] = None) -> list[dict]:
+    """The mouths a river request covers: those given, else the listed mouths in `bbox`."""
+    from forcingkit.fetchers.usgs_rivers import (
+        load_mouths,
+        mouths_in_bbox,
+        validate_mouth,
+    )
+
+    if mouths is not None:
+        return [validate_mouth(dict(m)) for m in mouths]
+    return mouths_in_bbox(load_mouths(), bbox)
+
+
+def river_key(
+    bbox: list[float],
+    start_time: str,
+    hours: int,
+    max_gap_hours: int,
+    allow_climatology: bool,
+    mouths: list[dict],
+    min_share: float,
+    skip_ungauged: bool = False,
+) -> str:
+    """Cache id of a river delivery. The schema, the mouth entries and the derivation settings
+    are part of it; the derived gauges are not, and are recorded in the store instead."""
+    import hashlib
+
+    from forcingkit.fetchers.usgs_rivers import RIVER_SCHEMA, mouths_version
+
+    key = (
+        f"riv_{RIVER_SCHEMA}_{mouths_version(mouths)}_{bbox[0]}_{bbox[1]}_{bbox[2]}_"
+        f"{bbox[3]}_{start_time}_{hours}_g{max_gap_hours}_c{int(allow_climatology)}_"
+        f"s{min_share}_k{int(skip_ungauged)}"
+    )
+    return "riv_" + hashlib.sha256(key.encode()).hexdigest()[:12]
+
+
+def _provisional_store_is_stale(zarr_path: str) -> bool:
+    """True for a store built from provisional USGS values more than a day ago: USGS revises
+    provisional values, so such a store is rebuilt rather than served."""
+    import pandas as pd
+    import zarr
+
+    attrs = dict(zarr.open_group(zarr_path, mode="r", zarr_format=2).attrs)
+    if not attrs.get("provisional", False):
+        return False
+    built = pd.Timestamp(attrs.get("built_utc", "1970-01-01T00:00:00Z"))
+    age = pd.Timestamp.now(tz="UTC") - built
+    return age > pd.Timedelta(hours=PROVISIONAL_MAX_AGE_HOURS)
+
+
+def dispatch_river_request(
+    bbox: list[float],
+    start_time: str,
+    hours: int,
+    zarr_path: str,
+    max_gap_hours: int = 6,
+    allow_climatology: bool = False,
+    cache_bust: bool = False,
+    get=None,
+    mouths: Optional[list[dict]] = None,
+    min_share: Optional[float] = None,
+    skip_ungauged: bool = False,
+    rivers: Optional[list[dict]] = None,
+) -> str:
+    """Hourly discharge at each river mouth (`mouths`, else the listed mouths in `bbox`),
+    streamed to `zarr_path`. `rivers` passes already-derived rivers (tests)."""
+    import json
+
+    import pandas as pd
+
+    from forcingkit.fetchers import usgs_rivers
+    from forcingkit.zarr_stream import StreamingZarrWriter, store_is_complete
+
+    if (
+        not cache_bust
+        and store_is_complete(zarr_path, (usgs_rivers.RIVER_SCHEMA,))
+        and not _provisional_store_is_stale(zarr_path)
+    ):
+        logger.info(f"Cache hit for rivers: {zarr_path}")
+        return zarr_path
+
+    share = usgs_rivers.DEFAULT_MIN_SHARE if min_share is None else min_share
+    resolved = None if rivers is not None else river_mouths(bbox, mouths)
+    writer = None
+    sidecar: dict = {}
+    try:
+        for item in usgs_rivers.iter_rivers(
+            start_time,
+            hours,
+            bbox,
+            max_gap_hours=max_gap_hours,
+            allow_climatology=allow_climatology,
+            mouths=resolved,
+            min_share=share,
+            skip_ungauged=skip_ungauged,
+            rivers=rivers,
+            get=get,
+        ):
+            if item[0] == "static":
+                attrs = dict(item[1].attrs)
+                attrs["built_utc"] = pd.Timestamp.now(tz="UTC").strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                )
+                writer = StreamingZarrWriter(
+                    zarr_path,
+                    item[1],
+                    usgs_rivers.RECORD_DIMS,
+                    expected_records=hours + 1,
+                    attrs=attrs,
+                    record_attrs={
+                        k: {"units": u, "standard_name": sn}
+                        for k, (u, sn) in usgs_rivers.UNITS.items()
+                    },
+                )
+                sidecar = {
+                    "id": os.path.basename(zarr_path).removesuffix(".zarr"),
+                    "type": "river_discharge",
+                    "bbox": list(bbox),
+                    "start_time": start_time,
+                    "hours": hours,
+                    "max_gap_hours": max_gap_hours,
+                    "allow_climatology": allow_climatology,
+                    "schema": usgs_rivers.RIVER_SCHEMA,
+                    "min_share": share,
+                    "skip_ungauged": skip_ungauged,
+                    "skipped_rivers": json.loads(attrs["skipped_rivers"]),
+                    "mouths": resolved,
+                    "rivers": json.loads(attrs["provenance"]),
+                    "dropped": json.loads(attrs["derivation_dropped"]),
+                }
+                continue
+            if writer is None:
+                raise RuntimeError("river records arrived before the static fields")
+            writer.append(item[1], item[2])
+        if writer is None:
+            raise RuntimeError("the river fetcher yielded no data")
+        path = writer.close()
+        try:
+            with open(path.removesuffix(".zarr") + ".json", "w") as f:
+                json.dump(sidecar, f, indent=2)
+        except OSError as e:
+            logger.warning(f"Could not write the river sidecar for {path}: {e}")
+        return path
+    except Exception:
+        if writer is not None:
+            writer.abort()
+        raise
+
+
 def _stream_parent(
     module,
     zarr_path: str,

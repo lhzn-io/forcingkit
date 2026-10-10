@@ -1,0 +1,29 @@
+{
+  "region": "Long Island Sound and its approaches, US Northeast",
+  "note": "River mouths only. The gauges and the scale factor of each river are derived for every request from USGS NLDI and site metadata (see forcingkit.fetchers.usgs_rivers). comid is the NHDPlus outlet flowline; lon and lat place the mouth for the bbox test. include and exclude pin or rule out gauges by USGS site number.",
+  "mouths": [
+    {
+      "name": "Bronx",
+      "lon": -73.8584,
+      "lat": 40.8032,
+      "comid": 26431899,
+      "note": "Enters the East River at Clason Point. The outlet is set by hand: NHDPlus routes the East River on through New York Harbor."
+    },
+    {"name": "Housatonic", "lon": -73.1113, "lat": 41.1714, "comid": 7718580},
+    {
+      "name": "Quinnipiac",
+      "lon": -72.9053,
+      "lat": 41.2981,
+      "comid": 6178614,
+      "note": "The outlet basin is New Haven Harbor's, so the scaled flow also stands for the Mill and West Rivers."
+    },
+    {
+      "name": "Connecticut",
+      "lon": -72.3305,
+      "lat": 41.2726,
+      "comid": 7703046,
+      "note": "Travel time from Thompsonville to the mouth is roughly a day at high flow; set lag_hours to apply it."
+    },
+    {"name": "Thames", "lon": -72.0827, "lat": 41.3178, "comid": 6170754}
+  ]
+}

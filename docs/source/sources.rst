@@ -49,6 +49,13 @@ Providers
    * - NDBC buoys
      - `NOAA National Data Buoy Center <https://www.ndbc.noaa.gov/>`__
      - NOAA attribution.
+   * - River discharge
+     - `US Geological Survey <https://www.usgs.gov/>`__ stream gauges, through the `USGS Water
+       Data APIs <https://api.waterdata.usgs.gov/>`__; drainage areas from the USGS `NLDI
+       <https://waterdata.usgs.gov/blog/nldi-intro/>`__ and NHDPlus
+     - Cite the gauges as "U.S. Geological Survey, USGS Water Data for the Nation", with the site
+       numbers in the store's ``provenance``. USGS data are in the public domain; provisional
+       values are subject to revision.
    * - Water-column profiles
      - `University of Connecticut Department of Marine Sciences
        <https://marinesciences.uconn.edu/>`__ (`ERDDAP
