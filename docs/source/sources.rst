@@ -56,6 +56,14 @@ Providers
      - Cite the gauges as "U.S. Geological Survey, USGS Water Data for the Nation", with the site
        numbers in the store's ``provenance``. USGS data are in the public domain; provisional
        values are subject to revision.
+   * - Satellite surface fields
+     - `NOAA NESDIS CoastWatch <https://coastwatch.noaa.gov/>`__ ERDDAP servers: VIIRS
+       chlorophyll-a and Kd490 (S-NPP, NOAA-20, NOAA-21), Sentinel-3 OLCI chlorophyll-a, and the
+       gap-filled DINEOF products; MUR sea surface temperature from `NASA JPL
+       <https://podaac.jpl.nasa.gov/>`__ (PO.DAAC), served through CoastWatch
+     - Acknowledge NOAA NESDIS CoastWatch and the datasets named in the store's ``products``
+       attribute. MUR: JPL MUR MEaSUREs Project (2015) and Chin et al. (2017). OLCI and DINEOF
+       products require "Contains modified Copernicus Sentinel data [year]".
    * - Water-column profiles
      - `University of Connecticut Department of Marine Sciences
        <https://marinesciences.uconn.edu/>`__ (`ERDDAP
@@ -98,6 +106,9 @@ References
   estuaries. *Journal of Atmospheric and Oceanic Technology*, 20(1), 159-186.
   `doi:10.1175/1520-0426(2003)020<0159:AUGFVT>2.0.CO;2
   <https://doi.org/10.1175/1520-0426(2003)020%3C0159:AUGFVT%3E2.0.CO;2>`__
+- Chin, T. M., J. Vazquez-Cuervo and E. M. Armstrong (2017). A multi-scale high-resolution
+  analysis of global sea surface temperature. *Remote Sensing of Environment*, 200, 154-169.
+  `doi:10.1016/j.rse.2017.07.029 <https://doi.org/10.1016/j.rse.2017.07.029>`__
 - Dowell, D. C., C. R. Alexander, E. P. James, et al. (2022). The High-Resolution Rapid Refresh
   (HRRR): An hourly updating convection-allowing forecast model. Part I: Motivation and system
   description. *Weather and Forecasting*, 37(8), 1371-1395.
@@ -109,6 +120,9 @@ References
   (HRRR): An hourly updating convection-allowing forecast model. Part II: Forecast performance.
   *Weather and Forecasting*, 37(8), 1397-1417.
   `doi:10.1175/WAF-D-21-0130.1 <https://doi.org/10.1175/WAF-D-21-0130.1>`__
+- JPL MUR MEaSUREs Project (2015). GHRSST Level 4 MUR Global Foundation Sea Surface
+  Temperature Analysis (v4.1). PO.DAAC, CA, USA.
+  `doi:10.5067/GHGMR-4FJ04 <https://doi.org/10.5067/GHGMR-4FJ04>`__
 - NOAA (2002). *Implementation Plan, Port of New York and New Jersey Operational Forecast System
   (NYOFS)*. NOAA Technical Report NOS CO-OPS 37, Silver Spring, MD.
   `PDF <https://tidesandcurrents.noaa.gov/publications/techrpt37.pdf>`__
