@@ -167,5 +167,6 @@ PyPI as ``forcingkit``.
    :caption: Reference
 
    mesh_frames
+   layered_mesh
    sources
    roadmap
