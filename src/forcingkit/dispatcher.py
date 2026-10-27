@@ -424,6 +424,82 @@ def dispatch_atmosphere_request(
         raise
 
 
+def levels_key(
+    bbox: list[float],
+    start_time: str,
+    hours: int,
+    n_levels: int,
+    resolution_deg: float,
+    margin_deg: float,
+) -> str:
+    """Cache id of a lower-atmosphere delivery on native levels; the schema is part of it."""
+    import hashlib
+
+    from forcingkit.fetchers.hrrr_levels import HRRR_LEVELS_SCHEMA
+
+    key = (
+        f"lev_hrrr_{HRRR_LEVELS_SCHEMA}_{bbox[0]}_{bbox[1]}_{bbox[2]}_{bbox[3]}_"
+        f"{start_time}_{hours}_{n_levels}_{resolution_deg}_{margin_deg}"
+    )
+    return "lev_" + hashlib.sha256(key.encode()).hexdigest()[:12]
+
+
+def dispatch_levels_request(
+    bbox: list[float],
+    start_time: str,
+    hours: int,
+    zarr_path: str,
+    n_levels: int = 14,
+    resolution_deg: float = 0.03,
+    margin_deg: float = 0.25,
+    cache_bust: bool = False,
+) -> str:
+    """HRRR's lowest `n_levels` native levels for `hours` from `start_time`, streamed to
+    `zarr_path` (schema hrrr-levels-v1)."""
+    from forcingkit.fetchers import hrrr_levels
+    from forcingkit.zarr_stream import StreamingZarrWriter, store_is_complete
+
+    if not cache_bust and store_is_complete(
+        zarr_path, (hrrr_levels.HRRR_LEVELS_SCHEMA,)
+    ):
+        logger.info(f"Cache hit for atmosphere levels: {zarr_path}")
+        return zarr_path
+
+    writer = None
+    try:
+        for item in hrrr_levels.iter_levels(
+            start_time,
+            hours,
+            bbox,
+            n_levels=n_levels,
+            resolution_deg=resolution_deg,
+            margin_deg=margin_deg,
+        ):
+            if item[0] == "static":
+                writer = StreamingZarrWriter(
+                    zarr_path,
+                    item[1],
+                    hrrr_levels.RECORD_DIMS,
+                    expected_records=hours + 3,
+                    attrs=dict(item[1].attrs),
+                    record_attrs={
+                        k: {"units": u, "standard_name": sn}
+                        for k, (u, sn) in hrrr_levels.UNITS.items()
+                    },
+                )
+                continue
+            if writer is None:
+                raise RuntimeError("level records arrived before the static fields")
+            writer.append(item[1], item[2])
+        if writer is None:
+            raise RuntimeError("HRRR yielded no data")
+        return writer.close()
+    except Exception:
+        if writer is not None:
+            writer.abort()
+        raise
+
+
 PROVISIONAL_MAX_AGE_HOURS = 24
 
 

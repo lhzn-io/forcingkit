@@ -595,6 +595,63 @@ def generate_atmosphere(request: AtmosphereRequest) -> Dict[str, Any]:
     }
 
 
+class AtmosphereLevelsRequest(BaseModel):
+    bbox: BoundingBox
+    start_time: str  # ISO 8601, UTC
+    hours: int
+    n_levels: int = 14
+    resolution_deg: float = 0.03
+    margin_deg: float = 0.25
+    cache_bust: bool = False
+
+
+@app.post("/api/v1/atmosphere/levels")
+def generate_atmosphere_levels(request: AtmosphereLevelsRequest) -> Dict[str, Any]:
+    """The lower atmosphere above the surface delivery: HRRR wind, vertical velocity and
+    temperature on its lowest `n_levels` native levels (14 reach about 2.9 km over water), hourly
+    over the same window and grid as /api/v1/atmosphere, streamed to a Zarr store. About 63 MB of
+    HRRR is read per hour at 14 levels."""
+    from forcingkit.dispatcher import dispatch_levels_request, levels_key
+    from forcingkit.fetchers.hrrr_levels import MAX_LEVELS
+
+    if request.hours < 1:
+        raise HTTPException(status_code=400, detail="hours must be at least 1")
+    if not 1 <= request.n_levels <= MAX_LEVELS:
+        raise HTTPException(
+            status_code=400, detail=f"n_levels must be 1 to {MAX_LEVELS}"
+        )
+    bbox_list = [
+        request.bbox.min_lon,
+        request.bbox.min_lat,
+        request.bbox.max_lon,
+        request.bbox.max_lat,
+    ]
+    zarr_id = levels_key(
+        bbox_list,
+        request.start_time,
+        request.hours,
+        request.n_levels,
+        request.resolution_deg,
+        request.margin_deg,
+    )
+    zarr_path = os.path.join(_atmosphere_cache_dir(), f"{zarr_id}.zarr")
+    try:
+        final_path = dispatch_levels_request(
+            bbox_list,
+            request.start_time,
+            request.hours,
+            zarr_path,
+            n_levels=request.n_levels,
+            resolution_deg=request.resolution_deg,
+            margin_deg=request.margin_deg,
+            cache_bust=request.cache_bust,
+        )
+    except Exception as e:
+        logger.error(f"Atmosphere levels generation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"status": "success", "zarr_id": zarr_id, "zarr_path": final_path}
+
+
 @app.get("/api/v1/atmosphere/download/{zarr_id}")
 def download_atmosphere(zarr_id: str):
     cache_dir = _atmosphere_cache_dir()

@@ -25,6 +25,15 @@ Atmospheric forcing (``/api/v1/atmosphere``)
        <https://cds.climate.copernicus.eu/>`__ through `NumericalEarth
        <https://github.com/NumericalEarth/NumericalEarth.jl>`__ in the model, outside this
        service. See :doc:`atmospheric_forcing`.
+   * - **HRRR levels**
+     - ``/api/v1/atmosphere/levels`` reads the lowest hybrid levels of the same cycles' native-level
+       file (``wrfnatf01``) by byte range: U and V (rotated to east and north), vertical velocity
+       (converted from omega with the hydrostatic relation) and temperature every hour, and the
+       levels' heights and pressures once, from the first hour, since they move only a few metres
+       with the surface pressure. Over open water level 1 is about 10 m above the surface (its
+       wind agrees with the surface delivery's 10 m wind), level 6 about 430 m and level 14 about
+       2.8 km. Each CONUS message is fetched whole (1 to 2.4 MB), so 14 levels read about 63 MB an
+       hour: a 48 h window took 3 minutes and made a 7 MB store (schema ``hrrr-levels-v1``).
 
 Parent ocean (``/api/v1/obc``)
 ------------------------------

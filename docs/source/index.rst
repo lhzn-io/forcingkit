@@ -63,6 +63,11 @@ What it serves
      - HRRR surface fields (10 m wind, 2 m temperature and humidity, pressure, radiation,
        precipitation) on a regular 0.03 degree grid, hourly, as schema ``hrrr-atm-v1``. See
        :doc:`atmospheric_forcing`.
+   * - ``POST /api/v1/atmosphere/levels``
+     - The air above: HRRR wind, vertical velocity and temperature on its lowest native levels
+       (14 by default, about 10 m to 2.8 km above open water), over the same window and grid as
+       ``/api/v1/atmosphere``, as schema ``hrrr-levels-v1``. For vertical sections and air-parcel
+       tracks in a viewer; not a forcing. See :doc:`fetchers`.
    * - ``POST /api/v1/rivers``
      - Freshwater discharge at each listed river mouth in the box, hourly, from the tide-free
        `USGS <https://waterdata.usgs.gov/>`__ stream gauges upstream (chosen per request) scaled
