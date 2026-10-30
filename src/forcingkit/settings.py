@@ -71,6 +71,11 @@ def max_workers(default: int = 4) -> int:
     return int(env("FORCINGKIT_MAX_WORKERS", str(default)) or default)
 
 
+def job_workers(default: int = 2) -> int:
+    """Store builds the job queue runs at once (FORCINGKIT_JOB_WORKERS)."""
+    return int(env("FORCINGKIT_JOB_WORKERS", str(default)) or default)
+
+
 def erddap_timeouts() -> tuple[float, float]:
     """(connect, read) timeouts in seconds for ERDDAP profile reads
     (FORCINGKIT_ERDDAP_CONNECT_TIMEOUT, default 10; FORCINGKIT_ERDDAP_READ_TIMEOUT, default 60)."""

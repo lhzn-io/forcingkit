@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI, HTTPException, Request, Response  # noqa: E402
-from fastapi.responses import FileResponse, RedirectResponse  # noqa: E402
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
@@ -19,7 +19,14 @@ from forcingkit.dispatcher import (  # noqa: E402
     dispatch_station_profiles_request,
     dispatch_bounding_box_profiles_request,
 )
-from forcingkit_serve.routers import viewer, bathymetry, plotly_api, removed  # noqa: E402
+from forcingkit_serve.jobs import Job  # noqa: E402
+from forcingkit_serve.routers import (  # noqa: E402
+    viewer,
+    bathymetry,
+    plotly_api,
+    removed,
+    stores,
+)
 from forcingkit.fetchers.noaa import fetch_noaa_tide_data  # noqa: E402
 
 # Configure Logging
@@ -86,6 +93,7 @@ app.add_middleware(
 app.include_router(viewer.router)
 app.include_router(bathymetry.router)
 app.include_router(plotly_api.router)
+app.include_router(stores.router)
 # 410 Gone stubs for the routes removed on 2026-10-05; drop at the next release.
 app.include_router(removed.router)
 
@@ -336,6 +344,10 @@ def get_bbox_telemetry(request: TelemetryBBoxRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _bbox_list(bbox: BoundingBox) -> list[float]:
+    return [bbox.min_lon, bbox.min_lat, bbox.max_lon, bbox.max_lat]
+
+
 def _obc_hash_source(request: "OBCRequest", bbox_list: list, donor_id: str) -> str:
     """The string an OBC store id is hashed from. Shared by /obc/cache and /obc so the two can
     never disagree; it includes the store schema, so a store built under an older schema is never
@@ -409,51 +421,33 @@ async def predict_obc_donor_endpoint(request: OBCRequest) -> Dict[str, Any]:
 
 # Plain `def` for the long handlers: FastAPI runs them in its thread pool, so an hour-long parent
 # fetch no longer blocks every other request on the event loop.
-@app.post("/api/v1/obc")
-def generate_obc(request: OBCRequest) -> Dict[str, Any]:
-    bbox_list = [
-        request.bbox.min_lon,
-        request.bbox.min_lat,
-        request.bbox.max_lon,
-        request.bbox.max_lat,
-    ]
-    from forcingkit.dispatcher import (
-        delivered_obc_donor,
-        dispatch_obc_request,
-        predict_obc_donor,
-    )
-
-    meta = predict_obc_donor(bbox_list)
-    donor_id = meta.get("id", "unknown")
-
+def _obc_store(request: OBCRequest) -> tuple[str, str, str]:
+    """(zarr_id, zarr_path, predicted donor id) of the parent store `request` names."""
     import hashlib
 
-    # Hash unique configuration plus donor
-    hash_str = _obc_hash_source(request, bbox_list, donor_id)
-    raw_id = hashlib.md5(hash_str.encode()).hexdigest()[:12]
-    zarr_id = f"obc_{raw_id}"
-    zarr_name = f"{zarr_id}.zarr"
-    cache_dir = settings.cache_dir()
-    zarr_path = os.path.join(cache_dir, zarr_name)
+    from forcingkit.dispatcher import predict_obc_donor
 
+    donor_id = predict_obc_donor(_bbox_list(request.bbox)).get("id", "unknown")
+    # Hash unique configuration plus donor
+    hash_str = _obc_hash_source(request, _bbox_list(request.bbox), donor_id)
+    zarr_id = f"obc_{hashlib.md5(hash_str.encode()).hexdigest()[:12]}"
+    return zarr_id, os.path.join(settings.cache_dir(), f"{zarr_id}.zarr"), donor_id
+
+
+def _build_obc(request: OBCRequest) -> Dict[str, Any]:
+    """Build (or find cached) the parent store for `request`; raises on failure. Shared by the
+    synchronous route and the job queue."""
+    from forcingkit.dispatcher import delivered_obc_donor, dispatch_obc_request
     from forcingkit.fetchers.necofs import OBC_SCHEMA
     from forcingkit.zarr_stream import store_is_complete
 
-    if not request.cache_bust and store_is_complete(zarr_path, (OBC_SCHEMA,)):
-        return {
-            "status": "cached",
-            "zarr_id": zarr_id,
-            "zarr_path": zarr_path,
-            "download_url": f"/api/v1/obc/download/{zarr_id}",
-            "donor": delivered_obc_donor(zarr_path) or donor_id,
-            "predicted_donor": donor_id,
-        }
-
-    try:
-        final_path = dispatch_obc_request(
+    zarr_id, zarr_path, donor_id = _obc_store(request)
+    status = "cached"
+    if request.cache_bust or not store_is_complete(zarr_path, (OBC_SCHEMA,)):
+        zarr_path = dispatch_obc_request(
             start_date=request.start_date,
             duration_hours=request.duration_hours,
-            bbox=bbox_list,
+            bbox=_bbox_list(request.bbox),
             cache_bust=request.cache_bust,
             zarr_path=zarr_path,
             allow_donor_fallback=request.allow_donor_fallback,
@@ -463,15 +457,22 @@ def generate_obc(request: OBCRequest) -> Dict[str, Any]:
             pad_cells=request.pad_cells,
             vertical_spacing_m=request.vertical_spacing_m,
         )
-        return {
-            "status": "success",
-            "zarr_id": zarr_id,
-            "zarr_path": final_path,
-            "download_url": f"/api/v1/obc/download/{zarr_id}",
-            # The donor that delivered, which differs from the predicted one after a fallback.
-            "donor": delivered_obc_donor(final_path) or donor_id,
-            "predicted_donor": donor_id,
-        }
+        status = "success"
+    return {
+        "status": status,
+        "zarr_id": zarr_id,
+        "zarr_path": zarr_path,
+        "download_url": f"/api/v1/obc/download/{zarr_id}",
+        # The donor that delivered, which differs from the predicted one after a fallback.
+        "donor": delivered_obc_donor(zarr_path) or donor_id,
+        "predicted_donor": donor_id,
+    }
+
+
+@app.post("/api/v1/obc")
+def generate_obc(request: OBCRequest) -> Dict[str, Any]:
+    try:
+        return _build_obc(request)
     except Exception as e:
         logger.error(f"OBC generation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -546,11 +547,10 @@ def _atmosphere_cache_dir() -> str:
     return settings.cache_dir()
 
 
-@app.post("/api/v1/atmosphere")
-def generate_atmosphere(request: AtmosphereRequest) -> Dict[str, Any]:
-    """A prescribed atmosphere for an ocean model: HRRR hourly fields on a regular lon/lat grid,
-    from one hour before `start_time` to one hour after the end, streamed to a Zarr store."""
-    from forcingkit.dispatcher import atmosphere_key, dispatch_atmosphere_request
+def _atmosphere_store(request: AtmosphereRequest) -> tuple[str, str]:
+    """(zarr_id, zarr_path) of the atmosphere store `request` names; HTTPException 400 for a
+    request that cannot be served."""
+    from forcingkit.dispatcher import atmosphere_key
 
     if request.source != "hrrr":
         raise HTTPException(
@@ -558,34 +558,32 @@ def generate_atmosphere(request: AtmosphereRequest) -> Dict[str, Any]:
         )
     if request.hours < 1:
         raise HTTPException(status_code=400, detail="hours must be at least 1")
-    bbox_list = [
-        request.bbox.min_lon,
-        request.bbox.min_lat,
-        request.bbox.max_lon,
-        request.bbox.max_lat,
-    ]
     zarr_id = atmosphere_key(
-        bbox_list,
+        _bbox_list(request.bbox),
         request.start_time,
         request.hours,
         request.resolution_deg,
         request.margin_deg,
         request.source,
     )
-    zarr_path = os.path.join(_atmosphere_cache_dir(), f"{zarr_id}.zarr")
-    try:
-        final_path = dispatch_atmosphere_request(
-            bbox_list,
-            request.start_time,
-            request.hours,
-            zarr_path,
-            resolution_deg=request.resolution_deg,
-            margin_deg=request.margin_deg,
-            cache_bust=request.cache_bust,
-        )
-    except Exception as e:
-        logger.error(f"Atmosphere generation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return zarr_id, os.path.join(_atmosphere_cache_dir(), f"{zarr_id}.zarr")
+
+
+def _build_atmosphere(request: AtmosphereRequest) -> Dict[str, Any]:
+    """Build (or find cached) the atmosphere store for `request`; raises on failure. Shared by
+    the synchronous route and the job queue."""
+    from forcingkit.dispatcher import dispatch_atmosphere_request
+
+    zarr_id, zarr_path = _atmosphere_store(request)
+    final_path = dispatch_atmosphere_request(
+        _bbox_list(request.bbox),
+        request.start_time,
+        request.hours,
+        zarr_path,
+        resolution_deg=request.resolution_deg,
+        margin_deg=request.margin_deg,
+        cache_bust=request.cache_bust,
+    )
     return {
         "status": "success",
         "zarr_id": zarr_id,
@@ -593,6 +591,126 @@ def generate_atmosphere(request: AtmosphereRequest) -> Dict[str, Any]:
         "download_url": f"/api/v1/atmosphere/download/{zarr_id}",
         "source": request.source,
     }
+
+
+@app.post("/api/v1/atmosphere")
+def generate_atmosphere(request: AtmosphereRequest) -> Dict[str, Any]:
+    """A prescribed atmosphere for an ocean model: HRRR hourly fields on a regular lon/lat grid,
+    from one hour before `start_time` to one hour after the end, streamed to a Zarr store."""
+    _atmosphere_store(request)  # rejects a bad request with 400 before any work
+    try:
+        return _build_atmosphere(request)
+    except Exception as e:
+        logger.error(f"Atmosphere generation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Jobs: the same builds as /obc and /atmosphere, queued, so a caller polls for the result instead
+# of holding a request open through a cold build. The job id is the store id.
+
+JOB_KINDS = {"obc": "ocean", "atm": "atmosphere"}
+
+
+def _job_view(job: Job, http: Request) -> Dict[str, Any]:
+    from forcingkit_serve.stac import store_item
+
+    base = str(http.base_url).rstrip("/")
+    view: Dict[str, Any] = {
+        "job_id": job.id,
+        "kind": job.kind,
+        "status": job.status,
+        "submitted": job.submitted,
+        "started": job.started,
+        "finished": job.finished,
+        "error": job.error,
+        "status_url": f"{base}/api/v1/jobs/{job.id}",
+        "result": None,
+    }
+    if job.status == "succeeded" and job.result is not None:
+        donor = job.result.get("donor") or job.result.get("source")
+        view["result"] = store_item(
+            job.id, job.result["zarr_path"], base, job.kind, donor
+        )
+    return view
+
+
+def _submit(
+    http: Request,
+    zarr_id: str,
+    zarr_path: str,
+    cache_bust: bool,
+    build: Callable[[], Dict[str, Any]],
+    cached: Callable[[], Dict[str, Any]],
+) -> JSONResponse:
+    from forcingkit_serve.jobs import registry
+    from forcingkit_serve.routers.stores import store_complete
+
+    kind = JOB_KINDS[zarr_id.split("_", 1)[0]]
+    if not cache_bust and not registry.is_active(zarr_id) and store_complete(zarr_path):
+        job = registry.finished(zarr_id, kind, cached())
+    else:
+        job = registry.submit(zarr_id, kind, build, rebuild=cache_bust)
+    return JSONResponse(status_code=202, content=_job_view(job, http))
+
+
+@app.post("/api/v1/jobs/obc", status_code=202)
+def submit_obc_job(request: OBCRequest, http: Request) -> JSONResponse:
+    """Queue the parent-ocean build that /api/v1/obc runs; poll `status_url` for the result, a
+    STAC Item whose `zarr` asset is the store served over HTTP."""
+    from forcingkit.dispatcher import delivered_obc_donor
+
+    zarr_id, zarr_path, donor_id = _obc_store(request)
+    return _submit(
+        http,
+        zarr_id,
+        zarr_path,
+        request.cache_bust,
+        lambda: _build_obc(request),
+        lambda: {
+            "zarr_path": zarr_path,
+            "donor": delivered_obc_donor(zarr_path) or donor_id,
+        },
+    )
+
+
+@app.post("/api/v1/jobs/atmosphere", status_code=202)
+def submit_atmosphere_job(request: AtmosphereRequest, http: Request) -> JSONResponse:
+    """Queue the atmosphere build that /api/v1/atmosphere runs; poll `status_url`."""
+    zarr_id, zarr_path = _atmosphere_store(request)
+    return _submit(
+        http,
+        zarr_id,
+        zarr_path,
+        request.cache_bust,
+        lambda: _build_atmosphere(request),
+        lambda: {"zarr_path": zarr_path, "source": request.source},
+    )
+
+
+@app.get("/api/v1/jobs/{job_id}")
+def get_job(job_id: str, http: Request) -> Dict[str, Any]:
+    """A job's status, and its STAC Item once it has succeeded. A store that finished before the
+    service restarted is reported as a succeeded job."""
+    from forcingkit.dispatcher import delivered_obc_donor
+    from forcingkit_serve.jobs import registry
+    from forcingkit_serve.routers.stores import STORE_ID, store_complete
+
+    if not STORE_ID.match(job_id):
+        raise HTTPException(status_code=400, detail="invalid job id")
+    job = registry.get(job_id)
+    if job is None:
+        zarr_path = os.path.join(settings.cache_dir(), f"{job_id}.zarr")
+        if not store_complete(zarr_path):
+            raise HTTPException(status_code=404, detail=f"no job or store {job_id}")
+        kind = JOB_KINDS[job_id.split("_", 1)[0]]
+        donor = delivered_obc_donor(zarr_path) if kind == "ocean" else "hrrr"
+        job = Job(
+            id=job_id,
+            kind=kind,
+            status="succeeded",
+            result={"zarr_path": zarr_path, "donor": donor},
+        )
+    return _job_view(job, http)
 
 
 class AtmosphereLevelsRequest(BaseModel):
