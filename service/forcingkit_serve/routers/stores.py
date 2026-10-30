@@ -11,15 +11,16 @@ from forcingkit import settings
 
 router = APIRouter(prefix="/api/v1/stores", tags=["stores"])
 
-STORE_ID = re.compile(r"^(obc|atm)_[0-9a-f]{12}$")
+STORE_ID = re.compile(r"^(obc|atm|wav)_[0-9a-f]{12}$")
 
 
 def store_complete(zarr_path: str) -> bool:
     from forcingkit.fetchers.hrrr_atmosphere import HRRR_ATM_SCHEMA
     from forcingkit.fetchers.necofs import OBC_SCHEMA
+    from forcingkit.fetchers.nwps import NWPS_SCHEMA
     from forcingkit.zarr_stream import store_is_complete
 
-    return store_is_complete(zarr_path, (OBC_SCHEMA, HRRR_ATM_SCHEMA))
+    return store_is_complete(zarr_path, (OBC_SCHEMA, HRRR_ATM_SCHEMA, NWPS_SCHEMA))
 
 
 @router.api_route("/{store}/{path:path}", methods=["GET", "HEAD"])

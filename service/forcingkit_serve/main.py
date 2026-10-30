@@ -605,10 +605,113 @@ def generate_atmosphere(request: AtmosphereRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# Jobs: the same builds as /obc and /atmosphere, queued, so a caller polls for the result instead
-# of holding a request open through a cold build. The job id is the store id.
+class WavesRequest(BaseModel):
+    bbox: BoundingBox
+    start_time: str  # ISO 8601, UTC, on the hour
+    hours: int
+    source: str = "nwps"
+    wfo: str = "okx"  # NWS Weather Forecast Office
+    grid: str = "CG1"  # the office's computational grid
+    cache_bust: bool = False
 
-JOB_KINDS = {"obc": "ocean", "atm": "atmosphere"}
+
+def _waves_store(request: WavesRequest) -> tuple[str, str, Any]:
+    """(zarr_id, zarr_path, newest cycle) of the waves store `request` names; HTTPException 400
+    for a request that cannot be served. The newest cycle is fixed here, once, so a queued job
+    builds the store its id names."""
+    from forcingkit.dispatcher import waves_key
+    from forcingkit.fetchers import nwps
+
+    if request.source != "nwps":
+        raise HTTPException(
+            status_code=400, detail=f"unsupported source {request.source}"
+        )
+    if request.hours < 1:
+        raise HTTPException(status_code=400, detail="hours must be at least 1")
+    try:
+        wfo, grid = nwps.check_wfo_grid(request.wfo, request.grid)
+        times = nwps.record_times(request.start_time, request.hours)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    latest = nwps.newest_cycle(times[-1])
+    zarr_id = waves_key(
+        _bbox_list(request.bbox),
+        request.start_time,
+        request.hours,
+        wfo,
+        grid,
+        latest,
+        request.source,
+    )
+    return zarr_id, os.path.join(settings.cache_dir(), f"{zarr_id}.zarr"), latest
+
+
+def _build_waves(request: WavesRequest, store: tuple[str, str, Any]) -> Dict[str, Any]:
+    """Build (or find cached) the waves store `store` names for `request`; raises on failure.
+    Shared by the synchronous route and the job queue."""
+    from forcingkit.dispatcher import dispatch_waves_request
+
+    zarr_id, zarr_path, latest = store
+    final_path = dispatch_waves_request(
+        _bbox_list(request.bbox),
+        request.start_time,
+        request.hours,
+        zarr_path,
+        wfo=request.wfo,
+        grid=request.grid,
+        latest_cycle=latest,
+        cache_bust=request.cache_bust,
+    )
+    return {
+        "status": "success",
+        "zarr_id": zarr_id,
+        "zarr_path": final_path,
+        "download_url": f"/api/v1/waves/download/{zarr_id}",
+        "source": request.source,
+    }
+
+
+@app.post("/api/v1/waves")
+def generate_waves(request: WavesRequest) -> Dict[str, Any]:
+    """Surface waves from NOAA's Nearshore Wave Prediction System on the office's own grid
+    (significant height, peak period, direction of travel, swell height, forcing wind), hourly
+    from one hour before `start_time` to one hour after the end, streamed to a Zarr store. NOMADS
+    keeps about five days; older windows are served only from a configured archive, and a window
+    neither holds is a 404."""
+    store = _waves_store(request)  # rejects a bad request with 400 before any work
+    try:
+        return _build_waves(request, store)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Waves generation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/waves/download/{zarr_id}")
+def download_waves(zarr_id: str):
+    cache_dir = settings.cache_dir()
+    search_id = zarr_id if zarr_id.startswith("wav_") else f"wav_{zarr_id}"
+    zarr_path = os.path.join(cache_dir, f"{search_id}.zarr")
+    if not os.path.isdir(zarr_path):
+        raise HTTPException(status_code=404, detail="Waves Zarr store not found.")
+    zip_path = os.path.join(cache_dir, f"{search_id}.zip")
+    if _zip_is_stale(zip_path, zarr_path):
+        shutil.make_archive(zip_path.replace(".zip", ""), "zip", zarr_path)
+    return FileResponse(
+        zip_path, media_type="application/zip", filename=f"{search_id}.zip"
+    )
+
+
+# Jobs: the same builds as /obc, /atmosphere and /waves, queued, so a caller polls for the result
+# instead of holding a request open through a cold build. The job id is the store id.
+
+JOB_KINDS = {"obc": "ocean", "atm": "atmosphere", "wav": "waves"}
+
+# Donor reported for a finished store found on disk after a restart, by kind (ocean reads it).
+STORE_DONORS = {"atmosphere": "hrrr", "waves": "nwps"}
 
 
 def _job_view(job: Job, http: Request) -> Dict[str, Any]:
@@ -687,6 +790,21 @@ def submit_atmosphere_job(request: AtmosphereRequest, http: Request) -> JSONResp
     )
 
 
+@app.post("/api/v1/jobs/waves", status_code=202)
+def submit_waves_job(request: WavesRequest, http: Request) -> JSONResponse:
+    """Queue the waves build that /api/v1/waves runs; poll `status_url`."""
+    store = _waves_store(request)
+    zarr_id, zarr_path, _ = store
+    return _submit(
+        http,
+        zarr_id,
+        zarr_path,
+        request.cache_bust,
+        lambda: _build_waves(request, store),
+        lambda: {"zarr_path": zarr_path, "source": request.source},
+    )
+
+
 @app.get("/api/v1/jobs/{job_id}")
 def get_job(job_id: str, http: Request) -> Dict[str, Any]:
     """A job's status, and its STAC Item once it has succeeded. A store that finished before the
@@ -703,7 +821,9 @@ def get_job(job_id: str, http: Request) -> Dict[str, Any]:
         if not store_complete(zarr_path):
             raise HTTPException(status_code=404, detail=f"no job or store {job_id}")
         kind = JOB_KINDS[job_id.split("_", 1)[0]]
-        donor = delivered_obc_donor(zarr_path) if kind == "ocean" else "hrrr"
+        donor = (
+            delivered_obc_donor(zarr_path) if kind == "ocean" else STORE_DONORS[kind]
+        )
         job = Job(
             id=job_id,
             kind=kind,

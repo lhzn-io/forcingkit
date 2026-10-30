@@ -35,6 +35,25 @@ Atmospheric forcing (``/api/v1/atmosphere``)
        2.8 km. Each CONUS message is fetched whole (1 to 2.4 MB), so 14 levels read about 63 MB an
        hour: a 48 h window took 3 minutes and made a 7 MB store (schema ``hrrr-levels-v1``).
 
+Surface waves (``/api/v1/waves``)
+---------------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 14 86
+
+   * - Source
+     - Notes
+   * - **NWPS**
+     - NOAA's `Nearshore Wave Prediction System
+       <https://polar.ncep.noaa.gov/nwps/>`__: SWAN run by each coastal Weather Forecast Office on
+       its own computational grids, at 00 and 12 UTC, published on `NOMADS
+       <https://nomads.ncep.noaa.gov/pub/data/nccf/com/nwps/prod/>`__ as one GRIB2 file per grid
+       and cycle (the analysis and 144 hourly steps; about 26 MB for OKX CG1). One office and grid
+       per request, kept on that grid and cropped to the box (schema ``nwps-waves-v1``). NOMADS
+       keeps about five days; a directory or ``gs://`` archive named by
+       ``FORCINGKIT_NWPS_ARCHIVE`` is read first. See :doc:`waves`.
+
 Parent ocean (``/api/v1/obc``)
 ------------------------------
 

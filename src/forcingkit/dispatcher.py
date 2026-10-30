@@ -424,6 +424,74 @@ def dispatch_atmosphere_request(
         raise
 
 
+def waves_key(
+    bbox: list[float],
+    start_time: str,
+    hours: int,
+    wfo: str,
+    grid: str,
+    latest_cycle,
+    source: str = "nwps",
+) -> str:
+    """Cache id of a waves delivery. The schema and the newest cycle the window may use are part
+    of it, so a forecast window asked for again after a newer cycle is a new store."""
+    import hashlib
+
+    from forcingkit.fetchers.nwps import NWPS_SCHEMA
+
+    key = (
+        f"wav_{source}_{NWPS_SCHEMA}_{wfo.lower()}_{grid.upper()}_"
+        f"{bbox[0]}_{bbox[1]}_{bbox[2]}_{bbox[3]}_{start_time}_{hours}_"
+        f"{latest_cycle:%Y%m%d%H}"
+    )
+    return "wav_" + hashlib.sha256(key.encode()).hexdigest()[:12]
+
+
+def dispatch_waves_request(
+    bbox: list[float],
+    start_time: str,
+    hours: int,
+    zarr_path: str,
+    wfo: str = "okx",
+    grid: str = "CG1",
+    latest_cycle=None,
+    cache_bust: bool = False,
+) -> str:
+    """NWPS surface waves for `hours` from `start_time`, streamed to `zarr_path`."""
+    from forcingkit.fetchers import nwps
+    from forcingkit.zarr_stream import StreamingZarrWriter, store_is_complete
+
+    if not cache_bust and store_is_complete(zarr_path, (nwps.NWPS_SCHEMA,)):
+        logger.info(f"Cache hit for waves: {zarr_path}")
+        return zarr_path
+
+    writer = None
+    try:
+        for item in nwps.iter_waves(
+            start_time, hours, bbox, wfo=wfo, grid=grid, latest_cycle=latest_cycle
+        ):
+            if item[0] == "static":
+                writer = StreamingZarrWriter(
+                    zarr_path,
+                    item[1],
+                    nwps.RECORD_DIMS,
+                    expected_records=hours + 3,
+                    attrs=dict(item[1].attrs),
+                    record_attrs=nwps.RECORD_ATTRS,
+                )
+                continue
+            if writer is None:
+                raise RuntimeError("waves records arrived before the static fields")
+            writer.append(item[1], item[2])
+        if writer is None:
+            raise RuntimeError("NWPS yielded no data")
+        return writer.close()
+    except Exception:
+        if writer is not None:
+            writer.abort()
+        raise
+
+
 def levels_key(
     bbox: list[float],
     start_time: str,

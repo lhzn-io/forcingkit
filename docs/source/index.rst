@@ -68,6 +68,11 @@ What it serves
        (14 by default, about 10 m to 2.8 km above open water), over the same window and grid as
        ``/api/v1/atmosphere``, as schema ``hrrr-levels-v1``. For vertical sections and air-parcel
        tracks in a viewer; not a forcing. See :doc:`fetchers`.
+   * - ``POST /api/v1/waves``
+     - NWPS surface waves (significant height, peak period, direction of travel, swell height) and
+       the office's forcing wind, hourly on the forecast office's own grid, as schema
+       ``nwps-waves-v1``. NOMADS reaches back about five days; older windows come from a
+       configured archive. See :doc:`waves`.
    * - ``POST /api/v1/rivers``
      - Freshwater discharge at each listed river mouth in the box, hourly, from the tide-free
        `USGS <https://waterdata.usgs.gov/>`__ stream gauges upstream (chosen per request) scaled
@@ -81,8 +86,9 @@ What it serves
    * - ``POST /api/v1/telemetry/station``, ``POST /api/v1/telemetry/bbox``
      - Water-column profiles from the `UConn Marine Sciences <https://marinesciences.uconn.edu/>`__
        `ERDDAP server <http://merlin.dms.uconn.edu:8080/erddap/index.html>`__, by station or by box.
-   * - ``POST /api/v1/jobs/obc``, ``POST /api/v1/jobs/atmosphere``, ``GET /api/v1/jobs/{id}``
-     - The parent-ocean and atmosphere builds as queued jobs, each result a STAC Item, and the
+   * - ``POST /api/v1/jobs/obc``, ``POST /api/v1/jobs/atmosphere``, ``POST /api/v1/jobs/waves``,
+       ``GET /api/v1/jobs/{id}``
+     - The parent-ocean, atmosphere and waves builds as queued jobs, each result a STAC Item, and the
        finished stores read-only over HTTP at ``/api/v1/stores/``. Used by the Python client; see
        :doc:`client`.
    * - ``/api/v1/cache/...`` and ``/ui/``
@@ -173,6 +179,7 @@ PyPI as ``forcingkit``.
    nyofs
    hycom
    atmospheric_forcing
+   waves
    rivers
 
 .. toctree::

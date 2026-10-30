@@ -16,6 +16,7 @@ application's embedded Python (3.11 or newer).
 
    ocean = fk.ocean(box, "2025-07-01", 24)        # u, v, temp, salt, zeta on (time, z, lat, lon)
    air = fk.atmosphere(box, "2025-07-01", 24)     # HRRR u10, v10, t2m, q2m, sp, dswrf, dlwrf, prate
+   waves = fk.waves(box, "2025-07-01", 24, wfo="box", grid="CG1")  # NWPS hs, tp, dir, shts, ws, wdir
    buoy = fk.ndbc("44013", "2025-07-01", "2025-07-02", products=("stdmet", "adcp"))
    elevation = fk.bathymetry(box, resolution_m=30)
 
@@ -39,6 +40,8 @@ It submits a job and polls it:
        ``job_id``, ``status`` and ``status_url``.
    * - ``POST /api/v1/jobs/atmosphere``
      - The same for ``POST /api/v1/atmosphere``.
+   * - ``POST /api/v1/jobs/waves``
+     - The same for ``POST /api/v1/waves``.
    * - ``GET /api/v1/jobs/{job_id}``
      - ``status`` is ``queued``, ``running``, ``succeeded`` or ``failed`` (with ``error``). Once
        succeeded, ``result`` is a STAC Item describing the store.

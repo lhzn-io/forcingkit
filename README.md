@@ -12,7 +12,7 @@
 
 Spatiotemporal forcing for computational Earth-system models: selects, regrids and serves model-ready time series with provenance.
 
-`forcingkit` sits between operational and archive data providers (NOAA HRRR, NECOFS, NOAA OFS, HYCOM, NDBC, CO-OPS) and model codes such as `Oceananigans.jl`. It delivers a model's parent ocean on true z levels (`/api/v1/obc`) and its HRRR surface atmosphere on a regular grid (`/api/v1/atmosphere`), plus station observations for validation, as schema-versioned Zarr stores that record their sources.
+`forcingkit` sits between operational and archive data providers (NOAA HRRR, NWPS, NECOFS, NOAA OFS, HYCOM, NDBC, CO-OPS) and model codes such as `Oceananigans.jl`. It delivers a model's parent ocean on true z levels (`/api/v1/obc`), its HRRR surface atmosphere on a regular grid (`/api/v1/atmosphere`) and NWPS surface waves on the forecast office's own grid (`/api/v1/waves`), plus station observations for validation, as schema-versioned Zarr stores that record their sources.
 
 Documentation: <https://forcingkit.docs.lhzn.io>.
 
@@ -34,6 +34,7 @@ The primary goal of forcingkit is to provide clean, standardized ocean and atmos
 
 - **Oceanic Forcing**: NYOFS, NECOFS, DBOFS, HYCOM (global, 1994 to present).
 - **Atmospheric Forcing**: HRRR (3 km, hourly, 2014-07-30 to present), regridded to 0.03 degrees.
+- **Surface Waves**: NWPS (one forecast office's grid per request, for example OKX CG1 at about 1.8 km, hourly, not regridded). NOMADS keeps about five days; older windows need an NWPS archive (`FORCINGKIT_NWPS_ARCHIVE`).
 
 ## Roadmap
 

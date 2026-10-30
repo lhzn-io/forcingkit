@@ -221,6 +221,42 @@ def test_interpolate_trajectory_through_client(store_server, tmp_path):
     assert ds.attrs["featureType"] == "trajectory"
 
 
+def _waves_store() -> xr.Dataset:
+    """A small store in the nwps-waves-v1 layout, with one land cell."""
+    lon = np.linspace(-72.5, -72.4, 3)
+    lat = np.linspace(41.0, 41.1, 2)
+    time = pd.date_range(T0 - pd.Timedelta(hours=1), periods=5, freq="1h")
+    hs = np.ones((5, 2, 3), dtype=np.float32)
+    hs[:, 0, 0] = np.nan
+    return xr.Dataset(
+        {
+            "hs": (("time", "lat", "lon"), hs, {"units": "m"}),
+            "dir": (("time", "lat", "lon"), 90.0 * hs, {"units": "degree"}),
+            "forecast_hour": ("time", np.arange(5, dtype=np.float32)),
+            "wet": (("lat", "lon"), np.array([[0, 1, 1], [1, 1, 1]], dtype=np.uint8)),
+        },
+        coords={"time": time, "lat": lat, "lon": lon},
+        attrs={"schema": "nwps-waves-v1", "complete": True, "wfo": "okx"},
+    )
+
+
+def test_waves_job_flow(store_server, tmp_path):
+    root, base, _ = store_server
+    _publish(root, _waves_store())
+    service = FakeService(base, schema="nwps-waves-v1")
+    ds = _client(base, service, tmp_path).waves(BBOX, T0, 2, wfo="box", grid="CG2")
+    post = service.posts[0]
+    assert (post["source"], post["wfo"], post["grid"], post["hours"]) == (
+        "nwps",
+        "box",
+        "CG2",
+        2,
+    )
+    assert post["start_time"] == "2026-06-01T00:00:00"
+    assert ds.attrs["forcingkit_schema"] == "nwps-waves-v1"
+    assert np.isnan(ds["hs"].values[0, 0, 0]) and ds["wet"].values[0, 0] == 0
+
+
 async def test_async_client(store_server, tmp_path):
     root, base, _ = store_server
     _publish(root, z_v3_store())
@@ -240,3 +276,18 @@ async def test_async_client(store_server, tmp_path):
         assert traj["u"].values[0] == pytest.approx(
             linear_field(-70.8, 41.4, -3.0, 2.0), abs=1e-4
         )
+
+
+async def test_async_waves(store_server, tmp_path):
+    root, base, _ = store_server
+    _publish(root, _waves_store())
+    service = FakeService(base, schema="nwps-waves-v1")
+    async with AsyncClient(
+        base,
+        cache_dir=tmp_path / "cache",
+        poll_s=0,
+        http=httpx.AsyncClient(transport=httpx.MockTransport(service)),
+    ) as fk:
+        ds = await fk.waves(BBOX, T0, 2)
+    assert service.posts[0]["wfo"] == "okx" and service.posts[0]["grid"] == "CG1"
+    assert float(ds["dir"].values[0, 1, 1]) == 90.0

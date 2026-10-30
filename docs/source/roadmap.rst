@@ -93,9 +93,10 @@ Planned work
        search by box and time, would let segmented interpolation and other clients reuse stores
        that cover a request instead of building new ones.
    * - Surface waves
-     - No source serves significant wave height, period or direction. Candidates: NDBC spectral
-       observations (stations), NOAA GFS-Wave (WAVEWATCH III, forecast and recent archive), and
-       ERA5 waves (global, hourly, about 0.5 degree, long archive).
+     - NWPS serves nearshore waves for the coastal forecast offices (:doc:`waves`), but only about
+       five days back unless an archive is configured. Candidates for longer reach and open water:
+       NDBC spectral observations (stations), NOAA GFS-Wave (WAVEWATCH III, forecast and recent
+       archive), and ERA5 waves (global, hourly, about 0.5 degree, long archive).
    * - Warn on gaps in a donor's record
      - Every HYCOM experiment has a few gaps of up to 51 hours in its 3-hourly record, and the
        hourly resampling bridges them by linear interpolation without notice. Log a warning,

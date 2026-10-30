@@ -76,6 +76,12 @@ def job_workers(default: int = 2) -> int:
     return int(env("FORCINGKIT_JOB_WORKERS", str(default)) or default)
 
 
+def nwps_archive() -> str | None:
+    """An archive of NWPS GRIB2 files read before NOMADS (FORCINGKIT_NWPS_ARCHIVE): a directory,
+    or a `file://` or `gs://` prefix. Read only. Unset or empty means NOMADS alone."""
+    return env("FORCINGKIT_NWPS_ARCHIVE") or None
+
+
 def erddap_timeouts() -> tuple[float, float]:
     """(connect, read) timeouts in seconds for ERDDAP profile reads
     (FORCINGKIT_ERDDAP_CONNECT_TIMEOUT, default 10; FORCINGKIT_ERDDAP_READ_TIMEOUT, default 60)."""

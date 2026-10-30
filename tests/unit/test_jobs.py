@@ -152,6 +152,69 @@ def test_atmosphere_job_rejects_unsupported_source(client):
     assert client.post("/api/v1/jobs/atmosphere", json=request).status_code == 400
 
 
+WAVES = {"bbox": BBOX, "start_time": "2026-06-01T00:00:00", "hours": 3}
+
+
+def _write_waves_store(path: str):
+    time_ = pd.date_range("2026-05-31T23:00", periods=6, freq="1h")
+    ds = xr.Dataset(
+        {"hs": (("time", "lat", "lon"), np.ones((6, 2, 3), dtype=np.float32))},
+        coords={"time": time_, "lat": [41.3, 41.4], "lon": [-70.9, -70.8, -70.7]},
+        attrs={"schema": "nwps-waves-v1", "complete": True},
+    )
+    ds.to_zarr(path, mode="w", consolidated=True, zarr_format=2)
+
+
+@pytest.mark.parametrize(
+    "change, message",
+    [
+        ({"source": "ww3"}, "unsupported source"),
+        ({"wfo": "xyz"}, "unknown NWPS office"),
+        ({"grid": "CG0"}, "CG1 to CG9"),
+        ({"start_time": "2026-06-01T00:30:00"}, "on the hour"),
+        ({"hours": 0}, "at least 1"),
+    ],
+)
+def test_waves_rejects_bad_requests(client, change, message):
+    for route in ("/api/v1/waves", "/api/v1/jobs/waves"):
+        response = client.post(route, json={**WAVES, **change})
+        assert response.status_code == 400 and message in response.json()["detail"]
+
+
+def test_waves_job_returns_stac_item_and_survives_restart(client, monkeypatch):
+    calls = []
+
+    def fake_dispatch(bbox, start_time, hours, zarr_path, **kwargs):
+        calls.append(kwargs)
+        _write_waves_store(zarr_path)
+        return zarr_path
+
+    monkeypatch.setattr(dispatcher, "dispatch_waves_request", fake_dispatch)
+    body = client.post("/api/v1/jobs/waves", json=WAVES).json()
+    assert body["job_id"].startswith("wav_") and body["kind"] == "waves"
+    done = _wait(client, body["status_url"])
+    assert done["status"] == "succeeded"
+    assert calls[0]["wfo"] == "okx" and calls[0]["latest_cycle"] is not None
+    item = pystac.Item.from_dict(done["result"])
+    assert item.properties["forcingkit:schema"] == "nwps-waves-v1"
+    assert item.properties["forcingkit:donor"] == "nwps"
+    assert client.get(f"/api/v1/stores/{item.id}.zarr/.zattrs").status_code == 200
+
+    monkeypatch.setattr(jobs, "registry", jobs.JobRegistry(workers=1))
+    again = client.get(f"/api/v1/jobs/{item.id}").json()
+    assert again["status"] == "succeeded"
+    assert again["result"]["properties"]["forcingkit:donor"] == "nwps"
+
+
+def test_waves_out_of_reach_is_404(client, monkeypatch):
+    def out_of_reach(*args, **kwargs):
+        raise LookupError("no NWPS cycle holds 2026-06-01T00:00Z")
+
+    monkeypatch.setattr(dispatcher, "dispatch_waves_request", out_of_reach)
+    response = client.post("/api/v1/waves", json=WAVES)
+    assert response.status_code == 404 and "no NWPS cycle" in response.json()["detail"]
+
+
 def test_store_files_are_served(client, tmp_path):
     _write_store(str(tmp_path / "obc_0123456789ab.zarr"))
     base = "/api/v1/stores/obc_0123456789ab.zarr"

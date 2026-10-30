@@ -47,6 +47,10 @@ dependencies = [
     "pillow>=10.0",
 ]
 
+[project.optional-dependencies]
+# Reading an NWPS archive from a gs:// prefix (FORCINGKIT_NWPS_ARCHIVE).
+gcs = ["gcsfs>=2026.2.0"]
+
 [tool.hatch.build.targets.wheel]
 # The library and the FastAPI service that serves it (forcingkit_serve.main:app).
 packages = ["src/forcingkit", "service/forcingkit_serve"]

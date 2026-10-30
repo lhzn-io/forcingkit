@@ -82,6 +82,18 @@ def _atmosphere_request(bbox, start, hours, resolution_deg, margin_deg, cache_bu
     }
 
 
+def _waves_request(bbox, start, hours, wfo, grid, cache_bust):
+    return {
+        "bbox": _bbox(bbox),
+        "start_time": iso_utc(start),
+        "hours": int(hours),
+        "source": "nwps",
+        "wfo": str(wfo),
+        "grid": str(grid),
+        "cache_bust": bool(cache_bust),
+    }
+
+
 def _ndbc_dataset(data: Dict[str, Any]) -> xr.Dataset:
     """The /api/v1/ndbc payload as one Dataset on a shared time axis (outer join)."""
     parts = []
@@ -301,6 +313,21 @@ class Client(_Base):
         )
         return self.open_item(self._wait("/api/v1/jobs/atmosphere", payload))
 
+    def waves(
+        self,
+        bbox: BBox,
+        start: TimeLike,
+        hours: int,
+        wfo: str = "okx",
+        grid: str = "CG1",
+        cache_bust: bool = False,
+    ) -> xr.Dataset:
+        """NWPS surface waves (`hs`, `tp`, `dir` as direction of travel, `shts`, and the forcing
+        wind `ws`, `wdir`) hourly on the office's own grid, land as NaN. `start` must be on the
+        hour; NOMADS reaches back about five days unless the service has an archive."""
+        payload = _waves_request(bbox, start, hours, wfo, grid, cache_bust)
+        return self.open_item(self._wait("/api/v1/jobs/waves", payload))
+
     def ndbc(
         self,
         station_id: str,
@@ -422,6 +449,19 @@ class AsyncClient(_Base):
             bbox, start, hours, resolution_deg, margin_deg, cache_bust
         )
         item = await self._wait("/api/v1/jobs/atmosphere", payload)
+        return await asyncio.to_thread(self.open_item, item)
+
+    async def waves(
+        self,
+        bbox: BBox,
+        start: TimeLike,
+        hours: int,
+        wfo: str = "okx",
+        grid: str = "CG1",
+        cache_bust: bool = False,
+    ) -> xr.Dataset:
+        payload = _waves_request(bbox, start, hours, wfo, grid, cache_bust)
+        item = await self._wait("/api/v1/jobs/waves", payload)
         return await asyncio.to_thread(self.open_item, item)
 
     async def ndbc(
