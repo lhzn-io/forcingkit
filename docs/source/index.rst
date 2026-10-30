@@ -81,12 +81,20 @@ What it serves
    * - ``POST /api/v1/telemetry/station``, ``POST /api/v1/telemetry/bbox``
      - Water-column profiles from the `UConn Marine Sciences <https://marinesciences.uconn.edu/>`__
        `ERDDAP server <http://merlin.dms.uconn.edu:8080/erddap/index.html>`__, by station or by box.
+   * - ``POST /api/v1/jobs/obc``, ``POST /api/v1/jobs/atmosphere``, ``GET /api/v1/jobs/{id}``
+     - The parent-ocean and atmosphere builds as queued jobs, each result a STAC Item, and the
+       finished stores read-only over HTTP at ``/api/v1/stores/``. Used by the Python client; see
+       :doc:`client`.
    * - ``/api/v1/cache/...`` and ``/ui/``
      - The cache viewer: an inventory of every store, with 2D and 3D previews.
 
 Each generating route has ``/download/{zarr_id}`` and, for the parent ocean, ``/cache`` and
 ``/predict-donor`` companions. The running service publishes its full OpenAPI description at
 ``/docs``.
+
+From Python, the ``forcingkit-client`` package wraps these routes, returns xarray objects, and
+interpolates forcing along a trajectory (a tagged animal, a vessel, a drifter); see
+:doc:`client`.
 
 Parent-ocean donors at a glance
 -------------------------------
@@ -171,6 +179,7 @@ PyPI as ``forcingkit``.
    :maxdepth: 1
    :caption: Reference
 
+   client
    mesh_frames
    layered_mesh
    sources

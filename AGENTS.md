@@ -37,6 +37,12 @@ observations for validation.
   Use `python -m pytest` rather than the bare `pytest` entry point: the latter can
   resolve to a system interpreter outside the venv. `tests/conftest.py` puts
   `src/` and `service/` on `sys.path`, so no `PYTHONPATH` export is needed.
+- **Client**: `client/` is a second distribution, `forcingkit-client` (import
+  `forcingkit_client`), with its own `pyproject.toml` and lock. It talks to the service over
+  HTTP only and must never import `forcingkit` or take on the service's dependencies. Test it
+  with `uv run --project client python -m pytest client/tests`. A change to the job routes
+  (`/api/v1/jobs`), the store routes (`/api/v1/stores`) or the STAC Item shape
+  (`service/forcingkit_serve/stac.py`) needs the client and its tests updated with it.
 - **Commits**: Conventional commits (`feat:`, `fix:`, `docs:`, `chore:`).
   Author and committer are always the human contributor (`dfry-lhzn <dfry@lhzn.io>`,
   from `git config`), so the log shows who was behind each change. No `Co-Authored-By:`

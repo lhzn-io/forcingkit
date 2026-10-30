@@ -33,3 +33,18 @@ jobs:
       # Run them locally or via workflow_dispatch.
       - name: Unit tests
         run: uv run python -m pytest tests/unit -m "not integration" --durations=10
+
+  client:
+    name: Client tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # Its own environment, so a client import of anything from the service stack fails here.
+      - name: Client tests
+        run: uv run --project client python -m pytest client/tests --durations=10

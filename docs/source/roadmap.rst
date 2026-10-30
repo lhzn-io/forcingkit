@@ -82,6 +82,20 @@ Planned work
      - HYCOM is the only parent ocean for current dates outside the US Northeast, and its server
        (``tds.hycom.org``) often stalls past the read timeout (:doc:`hycom`). Copernicus GLO12
        (see `Global parent ocean`_) would give an independent fallback for 2020-11-01 on.
+   * - Server-side trajectory interpolation
+     - :doc:`client` interpolates along a trajectory from one store over its bounding box, which
+       suits hours to days in one region. A multi-week track spanning hundreds of kilometres needs
+       the service to split it into segments, build or reuse one store per segment, and
+       interpolate each (``POST /api/v1/trajectory``). It would also serve callers outside
+       Python.
+   * - A STAC catalogue over the cache
+     - Job results are already STAC Items (:doc:`client`). Listing them as a catalogue, with a
+       search by box and time, would let segmented interpolation and other clients reuse stores
+       that cover a request instead of building new ones.
+   * - Surface waves
+     - No source serves significant wave height, period or direction. Candidates: NDBC spectral
+       observations (stations), NOAA GFS-Wave (WAVEWATCH III, forecast and recent archive), and
+       ERA5 waves (global, hourly, about 0.5 degree, long archive).
    * - Warn on gaps in a donor's record
      - Every HYCOM experiment has a few gaps of up to 51 hours in its 3-hourly record, and the
        hourly resampling bridges them by linear interpolation without notice. Log a warning,
