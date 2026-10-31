@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import sys
 import time
 import shutil
@@ -890,10 +891,17 @@ def generate_atmosphere_levels(request: AtmosphereLevelsRequest) -> Dict[str, An
     return {"status": "success", "zarr_id": zarr_id, "zarr_path": final_path}
 
 
+ATMOSPHERE_DOWNLOAD_ID = re.compile(r"^((atm|lev)_)?[0-9a-f]{12}$")
+
+
 @app.get("/api/v1/atmosphere/download/{zarr_id}")
 def download_atmosphere(zarr_id: str):
+    """The surface (`atm_`) or lower-atmosphere (`lev_`) store as a zip; a bare hash means
+    `atm_`."""
+    if not ATMOSPHERE_DOWNLOAD_ID.match(zarr_id):
+        raise HTTPException(status_code=400, detail="invalid atmosphere store id")
     cache_dir = _atmosphere_cache_dir()
-    search_id = zarr_id if zarr_id.startswith("atm_") else f"atm_{zarr_id}"
+    search_id = zarr_id if "_" in zarr_id else f"atm_{zarr_id}"
     zarr_path = os.path.join(cache_dir, f"{search_id}.zarr")
     if not os.path.isdir(zarr_path):
         raise HTTPException(status_code=404, detail="Atmosphere Zarr store not found.")

@@ -215,6 +215,36 @@ def test_waves_out_of_reach_is_404(client, monkeypatch):
     assert response.status_code == 404 and "no NWPS cycle" in response.json()["detail"]
 
 
+@pytest.mark.parametrize("prefix", ["atm_", "lev_"])
+def test_atmosphere_download_serves_surface_and_levels(client, tmp_path, prefix):
+    import io
+    import zipfile
+
+    zarr_id = prefix + "0123456789ab"
+    _write_store(str(tmp_path / f"{zarr_id}.zarr"))
+    response = client.get(f"/api/v1/atmosphere/download/{zarr_id}")
+    assert response.status_code == 200
+    assert f'filename="{zarr_id}.zip"' in response.headers["content-disposition"]
+    assert ".zattrs" in zipfile.ZipFile(io.BytesIO(response.content)).namelist()
+    if prefix == "atm_":  # a bare hash still means the surface store
+        assert client.get("/api/v1/atmosphere/download/0123456789ab").status_code == 200
+
+
+def test_atmosphere_download_refuses_other_ids(client):
+    for bad in (
+        "obc_0123456789ab",
+        "lev_0123",
+        "..%2Fatm_0123456789ab",
+        "wav_0123456789ab",
+    ):
+        assert client.get(f"/api/v1/atmosphere/download/{bad}").status_code in (
+            400,
+            404,
+        )
+    assert client.get("/api/v1/atmosphere/download/obc_0123456789ab").status_code == 400
+    assert client.get("/api/v1/atmosphere/download/lev_000000000000").status_code == 404
+
+
 def test_store_files_are_served(client, tmp_path):
     _write_store(str(tmp_path / "obc_0123456789ab.zarr"))
     base = "/api/v1/stores/obc_0123456789ab.zarr"
