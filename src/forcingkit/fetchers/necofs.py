@@ -1,9 +1,14 @@
 import warnings
 import logging
+import hashlib
+import json
+import os
+import threading
+from pathlib import Path
 import pandas as pd
 import numpy as np
 import xarray as xr
-from typing import Optional
+from typing import Any, Optional
 from scipy.spatial import Delaunay
 from forcingkit import settings
 
@@ -47,7 +52,9 @@ def get_necofs_url(target_dt: pd.Timestamp) -> str:
     history_url = f"http://www.smast.umassd.edu:8080/thredds/dodsC/models/fvcom/NECOFS/Archive/necofs_history/NECOFS_GOM7_{date_str}.nc"
 
     try:
-        resp = requests.get(history_url + ".dds", timeout=5)
+        resp = requests.get(
+            history_url + ".dds", headers={"User-Agent": USER_AGENT}, timeout=5
+        )
         if resp.status_code == 200:
             logger.info(f"Using historic NECOFS GOM7 archive: {history_url}")
             return history_url
@@ -294,7 +301,7 @@ def iter_parent(
         dap_url = get_necofs_url(file_date - pd.Timedelta(days=1))
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            ds_raw = xr.open_dataset(dap_url, engine="pydap", decode_times=False)
+            ds_raw = _open_dap(dap_url)
         drop_vars = [v for v in ["Itime", "Itime2"] if v in ds_raw.variables]
         ds = xr.decode_cf(ds_raw.drop_vars(drop_vars))
         ds_times = pd.DatetimeIndex(ds.time.values)
@@ -446,23 +453,24 @@ def read_surface(
     url = dap_url or NECOFS_GOM7_URL
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        ds_raw = xr.open_dataset(url, engine="pydap", decode_times=False)
+        ds_raw = _open_dap(url)
     drop_vars = [v for v in ["Itime", "Itime2"] if v in ds_raw.variables]
     ds = xr.decode_cf(ds_raw.drop_vars(drop_vars))
     times = pd.DatetimeIndex(ds.time.values)
     if times.tz is not None:
         times = times.tz_convert("UTC").tz_localize(None)
 
+    mesh = _whole_mesh(ds, url)
     min_lon, min_lat, max_lon, max_lat = bbox
-    lonc = np.asarray(ds["lonc"].values, dtype=np.float64)
-    latc = np.asarray(ds["latc"].values, dtype=np.float64)
+    lonc = np.asarray(mesh["lonc"], dtype=np.float64)
+    latc = np.asarray(mesh["latc"], dtype=np.float64)
     elems = np.flatnonzero(
         (lonc >= min_lon) & (lonc <= max_lon) & (latc >= min_lat) & (latc <= max_lat)
     )
     if elems.size == 0:
         raise ValueError(f"No NECOFS elements inside {bbox}")
     nv = (
-        np.asarray(ds["nv"].values).T.astype(np.int64) - 1
+        np.asarray(mesh["nv"]).T.astype(np.int64) - 1
     )  # (element, 3), zero-based node indices
     tri_global = nv[elems]
     nodes, tri_local = np.unique(tri_global, return_inverse=True)
@@ -512,11 +520,11 @@ def read_surface(
             "triangles": (("element", "vertex"), tri_local),
             "node_lon": (
                 ("node",),
-                np.asarray(ds["lon"].values)[nodes].astype(np.float32),
+                np.asarray(mesh["lon"])[nodes].astype(np.float32),
             ),
             "node_lat": (
                 ("node",),
-                np.asarray(ds["lat"].values)[nodes].astype(np.float32),
+                np.asarray(mesh["lat"])[nodes].astype(np.float32),
             ),
             "element_id": (("element",), elems.astype(np.int64)),
         },
@@ -538,11 +546,131 @@ NO_NEIGHBOUR = -1  # the edge is on the mesh boundary (coast or open boundary)
 OUTSIDE_SUBSET = -2  # the neighbour exists but lies outside the subset
 
 
+# Every request to the model's server names this package, as the other fetchers' requests do.
+USER_AGENT = "forcingkit (+https://github.com/lhzn-io/forcingkit)"
+_SESSION = None
+_SESSION_LOCK = threading.Lock()
+
+
+def _open_dap(url: str) -> xr.Dataset:
+    """`url` opened lazily with xarray's pydap engine (times not decoded); a remote file through one requests
+    session that sends USER_AGENT."""
+    global _SESSION
+    kwargs = {}
+    if str(url).startswith(("http://", "https://")):
+        import requests
+
+        with _SESSION_LOCK:
+            if _SESSION is None:
+                _SESSION = requests.Session()
+                _SESSION.headers["User-Agent"] = USER_AGENT
+        kwargs["session"] = _SESSION
+    return xr.open_dataset(url, engine="pydap", decode_times=False, **kwargs)
+
+
+# The model's whole mesh (node and element coordinates and the triangles, about 14 MB for GOM7) is read on every open
+# to find a box's elements. It does not change between the files of one mesh, so for a remote file it is kept on disk
+# under settings.cache_dir("necofs", "mesh"), keyed by the file family (rolling forecast or daily archive), the node
+# and element counts and the first and last few values of nv, lon and lonc; a changed or renumbered mesh misses the
+# cache and is read again, with a warning. Results are the same values either way.
+MESH_SCHEMA = "gom7-mesh-v1"
+MESH_VARIABLES = ("lon", "lat", "x", "y", "lonc", "latc", "xc", "yc", "nv")
+_MESH_PROBE = 8  # values read from each end of nv, lon and lonc for the key
+_MESHES: dict[str, dict[str, np.ndarray]] = {}
+_MESH_LOCK = threading.Lock()
+
+
+def _mesh_key(ds: xr.Dataset, url: str) -> tuple[str, str]:
+    """(family, key) for a remote file's mesh: a few small reads, no whole arrays."""
+    family = "forecast" if url == NECOFS_GOM7_URL else "archive"
+    n = _MESH_PROBE
+    probe = {
+        "schema": MESH_SCHEMA,
+        "family": family,
+        "node": int(ds.sizes["node"]),
+        "nele": int(ds.sizes["nele"]),
+    }
+    for name, dim in (("nv", "nele"), ("lon", "node"), ("lonc", "nele")):
+        size = int(ds.sizes[dim])
+        head = np.asarray(ds[name].isel({dim: slice(0, n)}).values)
+        tail = np.asarray(ds[name].isel({dim: slice(size - n, size)}).values)
+        probe[name] = [head.tolist(), tail.tolist()]
+    digest = hashlib.sha256(json.dumps(probe, sort_keys=True).encode()).hexdigest()[:16]
+    return family, f"{family}-{digest}"
+
+
+def _derive_mesh(arrays: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """The whole mesh's edge neighbours and boundary nodes, from its triangles."""
+    from forcingkit.mesh_frames import element_neighbours
+
+    nv = np.asarray(arrays["nv"]).T.astype(np.int64) - 1  # (element, 3), zero-based
+    nbe_all = element_neighbours(nv)
+    open_edge = nbe_all < 0
+    boundary_nodes = np.unique(
+        np.concatenate(
+            [nv[open_edge[:, j], (j + 1) % 3] for j in range(3)]
+            + [nv[open_edge[:, j], (j + 2) % 3] for j in range(3)]
+        )
+    )
+    return {**arrays, "nbe_all": nbe_all, "boundary_nodes": boundary_nodes}
+
+
+def _whole_mesh(ds: xr.Dataset, url: str) -> dict[str, np.ndarray]:
+    """The file's MESH_VARIABLES as stored, with `nbe_all` and `boundary_nodes`; for a remote file from the cache when
+    its mesh has been read before. Safe from several threads or processes: an entry is written under a temporary name
+    and renamed, and an entry that cannot be read is read from the server again."""
+
+    def read() -> dict[str, np.ndarray]:
+        return _derive_mesh(
+            {name: np.asarray(ds[name].values) for name in MESH_VARIABLES}
+        )
+
+    if not str(url).startswith(("http://", "https://")):
+        return read()
+    family, key = _mesh_key(ds, url)
+    with _MESH_LOCK:
+        if key in _MESHES:
+            return _MESHES[key]
+    path = Path(settings.cache_dir("necofs", "mesh", f"{key}.npz"))
+    mesh = None
+    if path.is_file():
+        try:
+            with np.load(path) as z:
+                mesh = {name: z[name] for name in z.files}
+        except Exception as exc:  # a damaged entry: read the mesh again
+            logger.warning(
+                f"NECOFS mesh cache {path} not read ({exc}); reading the mesh from {url}"
+            )
+    if mesh is None:
+        others = (
+            sorted(p.name for p in path.parent.glob(f"{family}-*.npz"))
+            if path.parent.is_dir()
+            else []
+        )
+        if others:
+            logger.warning(
+                f"NECOFS {family} mesh differs from the cached {others}; reading the new mesh from {url}"
+            )
+        mesh = read()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(
+            f".{path.stem}.{os.getpid()}.{threading.get_ident()}.tmp.npz"
+        )
+        # As Any: numpy's stubs would read the keyword arrays as its own options.
+        arrays: dict[str, Any] = mesh
+        np.savez(tmp, **arrays)
+        os.replace(tmp, path)
+        logger.info(f"NECOFS mesh read from {url}, cached as {path}")
+    with _MESH_LOCK:
+        _MESHES[key] = mesh
+    return mesh
+
+
 def _open_archive(url: str) -> tuple[xr.Dataset, pd.DatetimeIndex]:
     """An FVCOM file opened over OPeNDAP with CF times decoded, and its times as naive UTC."""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        ds_raw = xr.open_dataset(url, engine="pydap", decode_times=False)
+        ds_raw = _open_dap(url)
     drop_vars = [v for v in ["Itime", "Itime2"] if v in ds_raw.variables]
     ds = xr.decode_cf(ds_raw.drop_vars(drop_vars))
     times = pd.DatetimeIndex(ds.time.values)
@@ -622,39 +750,31 @@ def _subset_volume(
     ds: xr.Dataset, times: pd.DatetimeIndex, bbox, wanted: pd.DatetimeIndex, url: str
 ) -> xr.Dataset:
     """The full-depth subset of an opened FVCOM file (see `read_volume`)."""
-    from forcingkit.mesh_frames import element_neighbours
-
+    mesh = _whole_mesh(ds, url)
     min_lon, min_lat, max_lon, max_lat = bbox
-    lonc = np.asarray(ds["lonc"].values, dtype=np.float64)
-    latc = np.asarray(ds["latc"].values, dtype=np.float64)
+    lonc = np.asarray(mesh["lonc"], dtype=np.float64)
+    latc = np.asarray(mesh["latc"], dtype=np.float64)
     elems = np.flatnonzero(
         (lonc >= min_lon) & (lonc <= max_lon) & (latc >= min_lat) & (latc <= max_lat)
     )
     if elems.size == 0:
         raise ValueError(f"No NECOFS elements inside {bbox}")
 
-    nv = np.asarray(ds["nv"].values).T.astype(np.int64) - 1  # (element, 3), zero-based
+    nv = np.asarray(mesh["nv"]).T.astype(np.int64) - 1  # (element, 3), zero-based
     tri_global = nv[elems]
     nodes, tri_local = np.unique(tri_global, return_inverse=True)
     tri_local = tri_local.reshape(tri_global.shape).astype(np.int32)
 
     # Neighbours and boundary nodes come from the whole mesh: on the subset alone every element
     # on the subset's edge would look like a boundary element.
-    nbe_all = element_neighbours(nv)
+    nbe_all = mesh["nbe_all"]
     nbe = nbe_all[elems]
     pos = np.clip(np.searchsorted(elems, np.where(nbe >= 0, nbe, 0)), 0, elems.size - 1)
     selected = (nbe >= 0) & (elems[pos] == nbe)
     neighbours = np.where(
         nbe < 0, NO_NEIGHBOUR, np.where(selected, pos, OUTSIDE_SUBSET)
     ).astype(np.int32)
-    open_edge = nbe_all < 0
-    boundary_nodes = np.unique(
-        np.concatenate(
-            [nv[open_edge[:, j], (j + 1) % 3] for j in range(3)]
-            + [nv[open_edge[:, j], (j + 2) % 3] for j in range(3)]
-        )
-    )
-    on_boundary = np.isin(nodes, boundary_nodes)
+    on_boundary = np.isin(nodes, mesh["boundary_nodes"])
 
     t_idx = times.get_indexer(wanted)
     keep = t_idx >= 0
@@ -676,7 +796,7 @@ def _subset_volume(
         return _read_columns(ds[name], "node", nodes, None)
 
     def coord(name, idx):
-        return np.asarray(ds[name].values, dtype=np.float64)[idx]
+        return np.asarray(mesh[name], dtype=np.float64)[idx]
 
     lay, lev, ele, nod = "siglay", "siglev", "element", "node"
     data = {

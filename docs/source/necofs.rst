@@ -316,6 +316,19 @@ window. Hyperslabs are fetched with ``FORCINGKIT_MAX_WORKERS`` threads. Even so,
 above (2,831 elements, 1,829 nodes, 45 layers, about 110 MB) took about five minutes from SMAST
 on 2026-10-22, almost all of it server round trips, and 0.1 s from the cache.
 
+Finding a box's elements needs the whole mesh: the node and element coordinates (``lon``,
+``lat``, ``x``, ``y``, ``lonc``, ``latc``, ``xc``, ``yc``) and ``nv``, about 14 MB for GOM7,
+with the edge-neighbour table built from them. ``read_surface``, ``read_volume`` and ``volume``
+keep this once per mesh under ``$FORCINGKIT_CACHE_DIR/necofs/mesh/``, so an open of a remote file
+reads only a few values from each end of ``nv``, ``lon`` and ``lonc`` (to check the mesh) and
+then the requested data. The key is the file family (rolling forecast or daily archive), the node
+and element counts and those end values: a new or renumbered mesh misses the cache, is read in
+full and is logged as a warning. Entries are written under a temporary name and renamed, so
+concurrent builds are safe, and an entry that cannot be read is read from the server again.
+Results are the same values with or without the cache. Local files are not cached.
+
+Every request to SMAST names the package in its User-Agent, as the other fetchers' requests do.
+
 Wetting and drying
 ~~~~~~~~~~~~~~~~~~
 
@@ -358,8 +371,11 @@ tag, and the passing of donor options through the dispatcher.
 every value lands on its own element, node, layer and hour; neighbours are mutual, and the
 subset's edge is never mistaken for the coast; boundary nodes; windows assembled across
 archive files (the midnight record in its own day's file); a missing hour raising; and the
-cache. ``tests/integration/test_necofs_volume_live.py`` reads three hours across a file
-boundary from SMAST.
+cache. ``tests/unit/test_necofs_mesh_cache.py`` covers the mesh cache: the same subset from a
+local file, a remote one read cold and one read from the cache; a renumbered mesh and the forecast
+kept apart; a damaged entry read again; concurrent builds; and the User-Agent.
+``tests/integration/test_necofs_volume_live.py`` reads three hours across a file boundary from
+SMAST.
 
 References
 ----------
