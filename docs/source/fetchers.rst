@@ -67,7 +67,8 @@ Parent ocean (``/api/v1/obc``)
      - `Northeast Coastal Ocean Forecast System <https://fvcom.smast.umassd.edu/?p=20>`__, `FVCOM
        <https://fvcom.smast.umassd.edu/>`__ GOM7 (`UMass Dartmouth SMAST
        <https://www.umassd.edu/smast/>`__ and `WHOI <https://www.whoi.edu/>`__), unstructured mesh
-       with 45 sigma layers. Daily history files from 2025-01-01, then the rolling forecast.
+       with 45 sigma layers. Monthly hindcast from 1978 (GOM3 mesh to 2016), daily history files from
+       2025-01-01, then the rolling forecast.
        The only donor that streams the ``z-v3`` parent store. See :doc:`necofs`.
    * - **NYOFS**
      - `NOAA New York/New Jersey Operational Forecast System

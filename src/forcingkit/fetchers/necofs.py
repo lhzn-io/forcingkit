@@ -36,14 +36,57 @@ def supports_bbox(bbox: list[float]) -> bool:
 
 NECOFS_GOM7_URL = "http://www.smast.umassd.edu:8080/thredds/dodsC/models/fvcom/NECOFS/Forecasts/NECOFS_GOM7_FORECAST.nc"
 
+# SMAST's monthly hindcast (Seaplan_33_Hindcast_v1): hourly, each file holding its month from 00:00
+# on the 1st to 00:00 on the 1st of the next month. 1978 to 2016 are GOM3 runs on the coarser GOM3
+# mesh (gom3_YYYYMM.nc); from 2017 the files are on the GOM7 mesh (necofs_YYYY/NECOFS_YYYYMM.nc).
+# Same variable names either way.
+NECOFS_HINDCAST_BASE = "http://www.smast.umassd.edu:8080/thredds/dodsC/models/fvcom/NECOFS/Archive/Seaplan_33_Hindcast_v1"
+NECOFS_HINDCAST_GOM3_LAST_YEAR = 2016
+# Monthly files seen to exist; only hits are remembered, since a month may be published later.
+_HINDCAST_PRESENT: set[str] = set()
+
+
+def necofs_hindcast_url(t: pd.Timestamp) -> str:
+    """URL of the monthly hindcast file for the month containing `t` (whether or not it exists)."""
+    ym = t.strftime("%Y%m")
+    if t.year <= NECOFS_HINDCAST_GOM3_LAST_YEAR:
+        return f"{NECOFS_HINDCAST_BASE}/gom3_{ym}.nc"
+    return f"{NECOFS_HINDCAST_BASE}/necofs_{t.year}/NECOFS_{ym}.nc"
+
+
+def necofs_product(url: str) -> str:
+    """Which NECOFS product a file URL belongs to, for provenance."""
+    if url == NECOFS_GOM7_URL:
+        return "GOM7 rolling forecast"
+    if "/necofs_history/" in url:
+        return "GOM7 daily history"
+    if url.startswith(NECOFS_HINDCAST_BASE):
+        gom3 = url.rsplit("/", 1)[-1].startswith("gom3_")
+        return f"{'GOM3' if gom3 else 'GOM7-mesh'} monthly hindcast (Seaplan_33_Hindcast_v1)"
+    return "NECOFS file"
+
+
+def _dap_exists(url: str, timeout: float) -> bool:
+    import requests
+
+    try:
+        resp = requests.get(
+            url + ".dds", headers={"User-Agent": USER_AGENT}, timeout=timeout
+        )
+    except requests.RequestException:
+        return False
+    return resp.status_code == 200
+
 
 def get_necofs_url(target_dt: pd.Timestamp) -> str:
     """
-    Determine best NECOFS GOM7 URL by falling back to daily history archives.
-    SMAST daily archives (e.g. 2026_03_03.nc) contain [Mar 2 01:00 to Mar 3 00:00].
-    """
-    import requests
+    The NECOFS file to read for the day `target_dt`: the GOM7 daily history file if SMAST has it,
+    else the monthly hindcast file for that month, else the rolling GOM7 forecast.
 
+    SMAST daily archives (e.g. 2026_03_03.nc) contain [Mar 2 01:00 to Mar 3 00:00]; the daily
+    history starts in 2025. The monthly hindcast covers 1978 to the end of its latest published
+    year (2024 as of 2026-10). Callers check that the file holds the hours they need.
+    """
     # NECOFS GOM7 daily history files contain data for the PREVIOUS day up to 00:00 of the CURRENT day.
     # Therefore to get data forward-looking from target_dt, we must ALWAYS fetch the file for the NEXT day.
     file_dt = target_dt.normalize() + pd.Timedelta(days=1)
@@ -51,15 +94,17 @@ def get_necofs_url(target_dt: pd.Timestamp) -> str:
     date_str = file_dt.strftime("%Y_%m_%d")
     history_url = f"http://www.smast.umassd.edu:8080/thredds/dodsC/models/fvcom/NECOFS/Archive/necofs_history/NECOFS_GOM7_{date_str}.nc"
 
-    try:
-        resp = requests.get(
-            history_url + ".dds", headers={"User-Agent": USER_AGENT}, timeout=5
-        )
-        if resp.status_code == 200:
-            logger.info(f"Using historic NECOFS GOM7 archive: {history_url}")
-            return history_url
-    except requests.RequestException:
-        pass
+    if _dap_exists(history_url, timeout=5):
+        logger.info(f"Using historic NECOFS GOM7 archive: {history_url}")
+        return history_url
+
+    # The day's hours run from target_dt 01:00 to the next midnight, which the month's file
+    # holds too (it ends at 00:00 on the 1st of the next month).
+    hindcast_url = necofs_hindcast_url(target_dt.normalize())
+    if hindcast_url in _HINDCAST_PRESENT or _dap_exists(hindcast_url, timeout=30):
+        _HINDCAST_PRESENT.add(hindcast_url)
+        logger.info(f"Using NECOFS monthly hindcast: {hindcast_url}")
+        return hindcast_url
 
     logger.info("Falling back to NECOFS GOM7 rolling forecast.")
     return NECOFS_GOM7_URL
@@ -289,6 +334,7 @@ def iter_parent(
     shape = lon_grid.shape
 
     at_node = at_elem = None
+    first_mesh: Optional[tuple[int, int]] = None
     h_grid = siglay_grid = None
     z_centres = None
     max_workers = settings.max_workers()
@@ -308,7 +354,9 @@ def iter_parent(
         if ds_times.tz is not None:
             ds_times = ds_times.tz_convert("UTC").tz_localize(None)
 
+        mesh_sizes = (int(ds.sizes["node"]), int(ds.sizes["nele"]))
         if at_node is None:
+            first_mesh = mesh_sizes
             logger.info(
                 "Building NECOFS parent interpolation weights and vertical grid..."
             )
@@ -339,12 +387,22 @@ def iter_parent(
                     {
                         "type": "NECOFS/FVCOM GOM7 parent ocean",
                         "source": "UMass Dartmouth SMAST",
+                        # The first file read; a window may continue into a later product.
+                        "necofs_product": necofs_product(dap_url),
+                        "necofs_url": dap_url,
                         "schema": OBC_SCHEMA,
                         "pad_cells": pad_cells,
                         "vertical_spacing_m": vertical_spacing_m,
                         "requested_bbox": list(bbox),
                     },
                 ),
+            )
+        elif first_mesh is not None and mesh_sizes != first_mesh:
+            # The interpolation weights belong to the first file's mesh (GOM3 hindcast to 2016,
+            # GOM7 mesh after); a window across the change has to be requested in two parts.
+            raise RuntimeError(
+                f"{dap_url} is on a different NECOFS mesh ({mesh_sizes[0]} nodes) from the "
+                f"start of the window ({first_mesh[0]} nodes); split the request at {current_dt}"
             )
 
         wanted = pd.date_range(current_dt, min(end_dt, ds_times[-1]), freq="1h")

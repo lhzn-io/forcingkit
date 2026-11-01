@@ -2,7 +2,8 @@ NECOFS: Northeast Coastal Ocean Forecast System (FVCOM)
 =======================================================
 
 As of 2026-10-06. Mesh and archive facts on this page were read from the SMAST THREDDS server on
-that date (the 2026-10-01 history file and the archive catalogue).
+that date (the 2026-10-01 history file and the archive catalogue); the monthly hindcast entries
+were read on 2026-10-31.
 
 NECOFS is the recommended parent ocean from New York Harbor northward, and the only forcingkit
 donor that delivers the ``z-v3`` parent store: u, v, temperature, salinity and sea surface height
@@ -92,6 +93,14 @@ All access is OPeNDAP from ``http://www.smast.umassd.edu:8080/thredds/dodsC/mode
      - 24 hourly records. The file stamped day *D* holds D-1 01:00 to D 00:00 (UTC), so the record
        at midnight is in the file of the same date and every other hour of *D* is in the file of
        *D* + 1.
+   * - Monthly hindcast, GOM7 mesh
+     - ``Archive/Seaplan_33_Hindcast_v1/necofs_{yyyy}/NECOFS_{yyyy}{mm}.nc``
+     - 2017 to 2024 (as of 2026-10-31). Hourly, from 00:00 on the 1st to 00:00 on the 1st of the
+       next month (745 records for a 31-day month); same mesh and variables as the daily history.
+   * - Monthly hindcast, GOM3 mesh
+     - ``Archive/Seaplan_33_Hindcast_v1/gom3_{yyyy}{mm}.nc``
+     - 1978 to 2016, on the coarser GOM3 mesh (48,451 nodes against GOM7's 207,081), with the same
+       variable names and times in days rather than seconds.
    * - Rolling forecast
      - ``Forecasts/NECOFS_GOM7_FORECAST.nc``
      - The current run; 193 time records on 2026-10-06.
@@ -105,8 +114,11 @@ missing**, so a run that needs one of them cannot be built from NECOFS:
 - 2026: 01-03, 02-16, 02-25, 03-08, 03-24, 05-16 to 05-17, 05-28, 06-06 to 06-09, 06-17,
   07-02 to 07-03, 07-13 to 07-15, 08-25.
 
-Older history is not on the public server. Because each file also holds the first hour of its own
-date, a missing file *D* removes hours 01:00 to 23:00 of *D* - 1 and the 00:00 record of *D*.
+Dates before 2025 come from the monthly hindcast (``Seaplan_33_Hindcast_v1``); there is no hindcast
+for 2025 yet, so the gaps above still cannot be filled. Because each history file also holds the
+first hour of its own date, a missing file *D* removes hours 01:00 to 23:00 of *D* - 1 and the
+00:00 record of *D*. The ``necofs_2022`` folder also holds an empty stray, ``NECOFS_2022010.nc``,
+beside the real ``NECOFS_202210.nc``; forcingkit never asks for it.
 
 How forcingkit reads it
 -----------------------
@@ -115,8 +127,11 @@ How forcingkit reads it
 vertical_spacing_m=2.0)`` is a generator; the dispatcher writes what it yields straight to disk.
 
 1. **File choice.** For each hour the fetcher picks the history file that holds it and probes
-   it (an HTTP request for its ``.dds``, 5 s timeout). If the probe fails, it opens the rolling
-   forecast instead, which serves recent hours and fails for older ones.
+   it (an HTTP request for its ``.dds``, 5 s timeout). If that probe fails, it probes the monthly
+   hindcast file for the month (30 s timeout; files seen to exist are remembered), and failing
+   that opens the rolling forecast, which serves recent hours and fails for older ones. The store
+   records the first file read as ``necofs_product`` and ``necofs_url``. A window that crosses the
+   GOM3 to GOM7 mesh change (the end of 2016) is refused; request it in two parts.
 2. **Target grid.** A regular 0.002 degree longitude/latitude grid (about 170 m east-west and
    220 m north-south at 41 N) covering the request box plus ``pad_cells`` cells on every side, so
    the parent brackets the child.
