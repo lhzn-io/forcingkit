@@ -1,0 +1,59 @@
+name: Publish forcingkit-client to PyPI
+
+# Pushing a tag client-vX.Y.Z builds the client/ sdist and wheel and publishes them to PyPI through trusted
+# publishing (OIDC): no API token is stored anywhere. PyPI must list this repository, this workflow file and the
+# `pypi` environment as a trusted publisher for forcingkit-client. The service itself publishes on v* tags
+# (publish.yml).
+on:
+  push:
+    tags: ["client-v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Check the tag matches both version strings
+        run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("client/pyproject.toml", "rb"))["project"]["version"])')
+          init=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' client/src/forcingkit_client/__init__.py)
+          if [ "client-v$version" != "$GITHUB_REF_NAME" ] || [ "$init" != "$version" ]; then
+            echo "Tag $GITHUB_REF_NAME, client/pyproject.toml $version and __version__ $init must agree" >&2
+            exit 1
+          fi
+
+      # Its own environment, so a client import of anything from the service stack fails here.
+      - name: Test
+        run: uv run --project client python -m pytest client/tests
+
+      - name: Build
+        working-directory: client
+        run: uv build
+
+      - name: Check the distributions
+        working-directory: client
+        run: uvx twine check --strict dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: client/dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/forcingkit-client
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1

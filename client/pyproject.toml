@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 authors = [
-  { name = "Daniel Fry", email = "dfry@lhzn.io" },
+  { name = "Long Horizon Observatory", email = "dfry@lhzn.io" },
 ]
 classifiers = [
   "Development Status :: 3 - Alpha",
