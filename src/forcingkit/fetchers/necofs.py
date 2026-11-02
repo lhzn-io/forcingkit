@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 import xarray as xr
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 from scipy.spatial import Delaunay
 from forcingkit import settings
 
@@ -599,6 +599,44 @@ def read_surface(
 # Full-depth subset schema. Bump when the layout or meaning of a cached volume changes.
 VOLUME_SCHEMA = "volume-v1"
 
+# The time-varying fields `read_volume` and `volume` return; `variables` picks among them.
+VOLUME_FIELDS = ("u", "v", "ww", "temp", "salinity", "zeta")
+
+
+def _volume_selection(
+    variables: Sequence[str] | None,
+    layers: Sequence[int] | None,
+    n_layers: int | None = None,
+) -> tuple[tuple[str, ...], list[int] | None]:
+    """`variables` checked against VOLUME_FIELDS, in their order there (None: all); `layers` as sorted, unique,
+    zero-based sigma layer indices, surface first (None: all; negative indices count from the bottom, so -1 is the
+    bottom layer, which needs `n_layers`)."""
+    names: tuple[str, ...]
+    if variables is None:
+        names = VOLUME_FIELDS
+    else:
+        unknown = sorted(set(variables) - set(VOLUME_FIELDS))
+        if unknown or not variables:
+            raise ValueError(
+                f"variables must be among {VOLUME_FIELDS}; got {list(variables)}"
+            )
+        names = tuple(v for v in VOLUME_FIELDS if v in set(variables))
+    if layers is None:
+        return names, None
+    ks = [int(k) for k in layers]
+    if not ks:
+        raise ValueError("layers is empty")
+    if n_layers is not None:
+        if any(k >= n_layers or k < -n_layers for k in ks):
+            raise ValueError(
+                f"layers must lie in -{n_layers}..{n_layers - 1}; got {ks}"
+            )
+        ks = [k % n_layers for k in ks]
+    elif any(k < 0 for k in ks):
+        raise ValueError("negative layers need the file's layer count")
+    return names, sorted(set(ks))
+
+
 # Neighbour codes in the `neighbours` table of `read_volume` and `volume`.
 NO_NEIGHBOUR = -1  # the edge is on the mesh boundary (coast or open boundary)
 OUTSIDE_SUBSET = -2  # the neighbour exists but lies outside the subset
@@ -738,7 +776,11 @@ def _open_archive(url: str) -> tuple[xr.Dataset, pd.DatetimeIndex]:
 
 
 def _read_columns(
-    da: xr.DataArray, dim: str, idx: np.ndarray, t_slice: slice | None
+    da: xr.DataArray,
+    dim: str,
+    idx: np.ndarray,
+    t_slice: slice | None,
+    layers: list[int] | None = None,
 ) -> np.ndarray:
     """`da` at the sorted indices `idx` of its last dimension `dim`, read in a few hyperslabs
     fetched concurrently (`settings.max_workers`).
@@ -746,22 +788,41 @@ def _read_columns(
     Node indices in a coastal box are scattered across the mesh, so runs merge only short gaps:
     for the Fishers Island box a 2048 gap reads one slab of 76,356 nodes to get 1,829, while 256
     reads 59 slabs of 1,877 in a fifth of the time. Each slab costs a server round trip of about
-    0.3 to 1 s, hence the threads."""
+    0.3 to 1 s, hence the threads.
+
+    `layers` (sorted sigma layer indices) reads those layers only: one hyperslab per run of adjacent layers, so the
+    surface and the bottom are two reads per column run, not 45 layers' worth."""
     import concurrent.futures
 
     runs = _index_runs(idx, max_gap=256)
+    layer_runs: list[slice | None]
+    if layers is None:
+        layer_runs = [None]
+    else:
+        layer_runs = [
+            slice(a, b + 1) for a, b in _index_runs(np.asarray(layers), max_gap=1)
+        ]
 
-    def fetch(run):
-        a, b = run
+    def fetch(job):
+        (a, b), ks = job
         sel = idx[(idx >= a) & (idx <= b)]
         slab = {dim: slice(a, b + 1)}
         if t_slice is not None:
             slab["time"] = t_slice
+        if ks is not None:
+            slab["siglay"] = ks
         return np.asarray(da.isel(slab).values)[..., sel - a]
 
+    jobs = [(run, ks) for ks in layer_runs for run in runs]
     with concurrent.futures.ThreadPoolExecutor(settings.max_workers()) as pool:
-        blocks = list(pool.map(fetch, runs))
-    return np.concatenate(blocks, axis=-1).astype(np.float32, copy=False)
+        blocks = list(pool.map(fetch, jobs))
+    # Columns joined within each layer run, then the layer runs stacked along the layer axis.
+    per = len(runs)
+    parts = [
+        np.concatenate(blocks[i : i + per], axis=-1) for i in range(0, len(blocks), per)
+    ]
+    out = parts[0] if len(parts) == 1 else np.concatenate(parts, axis=-2)
+    return out.astype(np.float32, copy=False)
 
 
 VOLUME_VARIABLE_ATTRS = {
@@ -805,18 +866,36 @@ VOLUME_VARIABLE_ATTRS = {
 
 
 def _subset_volume(
-    ds: xr.Dataset, times: pd.DatetimeIndex, bbox, wanted: pd.DatetimeIndex, url: str
+    ds: xr.Dataset,
+    times: pd.DatetimeIndex,
+    bbox,
+    wanted: pd.DatetimeIndex,
+    url: str,
+    variables: Sequence[str] | None = None,
+    layers: Sequence[int] | None = None,
+    elements: Sequence[int] | None = None,
 ) -> xr.Dataset:
     """The full-depth subset of an opened FVCOM file (see `read_volume`)."""
     mesh = _whole_mesh(ds, url)
-    min_lon, min_lat, max_lon, max_lat = bbox
     lonc = np.asarray(mesh["lonc"], dtype=np.float64)
     latc = np.asarray(mesh["latc"], dtype=np.float64)
-    elems = np.flatnonzero(
-        (lonc >= min_lon) & (lonc <= max_lon) & (latc >= min_lat) & (latc <= max_lat)
-    )
-    if elems.size == 0:
-        raise ValueError(f"No NECOFS elements inside {bbox}")
+    if elements is not None:
+        elems = np.unique(np.asarray(elements, dtype=np.int64))
+        if elems.size == 0:
+            raise ValueError("elements is empty")
+        if elems[0] < 0 or elems[-1] >= lonc.size:
+            raise ValueError(f"elements must lie in 0..{lonc.size - 1}")
+    else:
+        min_lon, min_lat, max_lon, max_lat = bbox
+        elems = np.flatnonzero(
+            (lonc >= min_lon)
+            & (lonc <= max_lon)
+            & (latc >= min_lat)
+            & (latc <= max_lat)
+        )
+        if elems.size == 0:
+            raise ValueError(f"No NECOFS elements inside {bbox}")
+    names, ks = _volume_selection(variables, layers, int(ds.sizes["siglay"]))
 
     nv = np.asarray(mesh["nv"]).T.astype(np.int64) - 1  # (element, 3), zero-based
     tri_global = nv[elems]
@@ -845,10 +924,12 @@ def _subset_volume(
     t_slice, rows = slice(t0, t1 + 1), t_idx - t0
 
     def at_elements(name):
-        return _read_columns(ds[name], "nele", elems, t_slice)[rows]
+        return _read_columns(ds[name], "nele", elems, t_slice, ks)[rows]
 
-    def at_nodes(name):
-        return _read_columns(ds[name], "node", nodes, t_slice)[rows]
+    def at_nodes(name, layered=True):
+        return _read_columns(ds[name], "node", nodes, t_slice, ks if layered else None)[
+            rows
+        ]
 
     def static_nodes(name):
         return _read_columns(ds[name], "node", nodes, None)
@@ -857,15 +938,19 @@ def _subset_volume(
         return np.asarray(mesh[name], dtype=np.float64)[idx]
 
     lay, lev, ele, nod = "siglay", "siglev", "element", "node"
+    readers = {
+        "u": lambda: (("time", lay, ele), at_elements("u")),
+        "v": lambda: (("time", lay, ele), at_elements("v")),
+        "ww": lambda: (("time", lay, ele), at_elements("ww")),
+        "temp": lambda: (("time", lay, nod), at_nodes("temp")),
+        "salinity": lambda: (("time", lay, nod), at_nodes("salinity")),
+        "zeta": lambda: (("time", nod), at_nodes("zeta", layered=False)),
+    }
+    siglay = static_nodes("siglay")
     data = {
-        "u": (("time", lay, ele), at_elements("u")),
-        "v": (("time", lay, ele), at_elements("v")),
-        "ww": (("time", lay, ele), at_elements("ww")),
-        "temp": (("time", lay, nod), at_nodes("temp")),
-        "salinity": (("time", lay, nod), at_nodes("salinity")),
-        "zeta": (("time", nod), at_nodes("zeta")),
+        **{name: readers[name]() for name in names},
         "h": ((nod,), static_nodes("h")),
-        "siglay": ((lay, nod), static_nodes("siglay")),
+        "siglay": ((lay, nod), siglay if ks is None else siglay[ks]),
         "siglev": ((lev, nod), static_nodes("siglev")),
         "x": ((nod,), coord("x", nodes)),
         "y": ((nod,), coord("y", nodes)),
@@ -881,31 +966,45 @@ def _subset_volume(
         "element_id": ((ele,), elems.astype(np.int64)),
         "node_id": ((nod,), nodes.astype(np.int64)),
     }
+    layer_index = np.arange(int(ds.sizes["siglay"])) if ks is None else np.asarray(ks)
     out = xr.Dataset(data, coords={"time": wanted})
+    if (
+        ks is not None
+    ):  # a whole volume stays as it was, so whole volumes cached before selections existed still match
+        out = out.assign_coords(layer=(lay, layer_index.astype(np.int32)))
+        out["layer"].attrs["long_name"] = (
+            "zero-based sigma layer index in the full model, surface first"
+        )
     for name, attrs in VOLUME_VARIABLE_ATTRS.items():
-        out[name].attrs.update(attrs)
+        if name in out:
+            out[name].attrs.update(attrs)
     out.attrs.update(
         {
             "type": "NECOFS/FVCOM GOM7 full-depth subset on the model mesh",
             "source": "UMass Dartmouth SMAST",
             "url": url,
-            "requested_bbox": list(bbox),
+            "requested_bbox": list(bbox) if bbox is not None else [],
+            "requested_elements": int(elems.size) if elements is not None else 0,
+            "variables": list(names),
             "schema": VOLUME_SCHEMA,
             "crs_xy": "EPSG:26984",
         }
     )
     logger.info(
         f"NECOFS volume: {elems.size} elements, {nodes.size} nodes, "
-        f"{ds.sizes['siglay']} layers, {len(wanted)} hours from {url}"
+        f"{len(layer_index)} of {ds.sizes['siglay']} layers, {', '.join(names)}, {len(wanted)} hours from {url}"
     )
     return out
 
 
 def read_volume(
-    bbox: list[float],
+    bbox: list[float] | None,
     start_time: str | pd.Timestamp,
     hours: int,
     dap_url: str | None = None,
+    variables: Sequence[str] | None = None,
+    layers: Sequence[int] | None = None,
+    elements: Sequence[int] | None = None,
 ) -> xr.Dataset:
     """Every sigma layer on the FVCOM mesh itself (no regridding, no vertical conversion), for the
     elements whose centres lie in `bbox` = [min_lon, min_lat, max_lon, max_lat] and the nodes of
@@ -930,40 +1029,73 @@ def read_volume(
     - `on_boundary` (node): the node lies on the mesh boundary.
     - `element_id`, `node_id`: indices in the full mesh.
 
+    A selection reads less from the server (each is optional; leaving all three out reads
+    everything, as before):
+
+    - `variables`: the time-varying fields to read, among VOLUME_FIELDS (`u`, `v`, `ww`, `temp`,
+      `salinity`, `zeta`); the static fields and coordinates always come.
+    - `layers`: zero-based sigma layer indices, surface first; negative ones count from the
+      bottom (`[0, -1]` is the surface and the bottom layer). The layered fields and `siglay` then
+      hold those layers only, sorted, with their model indices in a `layer` coordinate; `siglev` keeps every
+      interface, so layer `k`'s interfaces are `siglev[k]` and `siglev[k + 1]`.
+    - `elements`: zero-based element indices in the full mesh (as `element_id` returns them),
+      read in place of the elements of `bbox`, which may then be None. For a line or a scattered
+      set, where a box around it would read far more.
+
     Reads the rolling GOM7 forecast unless `dap_url` names another file (for example an archive
     day from `get_necofs_url`). For a window that spans several archive files, use `volume`.
     """
+    if bbox is None and elements is None:
+        raise ValueError("read_volume needs a bbox or elements")
     url = dap_url or NECOFS_GOM7_URL
     ds, times = _open_archive(url)
     start = pd.Timestamp(start_time)
     start = start.tz_convert("UTC").tz_localize(None) if start.tzinfo else start
     wanted = pd.date_range(start.floor("h"), periods=hours, freq="1h")
-    return _subset_volume(ds, times, bbox, wanted, url)
+    return _subset_volume(ds, times, bbox, wanted, url, variables, layers, elements)
 
 
-def volume_cache_key(bbox, start: pd.Timestamp, end: pd.Timestamp) -> str:
-    """Cache key of a `volume` request: the schema, the box to 1e-4 degree and the window."""
+def volume_cache_key(
+    bbox,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    variables: Sequence[str] | None = None,
+    layers: Sequence[int] | None = None,
+    elements: Sequence[int] | None = None,
+) -> str:
+    """Cache key of a `volume` request: the schema, the box to 1e-4 degree, the window and any
+    selection. A request without a selection keeps the key it had before selections existed, so
+    caches of whole volumes stay valid; one with a selection never shares a key with a whole one."""
     import hashlib
     import json
 
-    key = json.dumps(
-        {
-            "schema": VOLUME_SCHEMA,
-            "bbox": [round(float(b), 4) for b in bbox],
-            "start": start.isoformat(),
-            "end": end.isoformat(),
-        },
-        sort_keys=True,
-    )
+    fields = {
+        "schema": VOLUME_SCHEMA,
+        "bbox": [round(float(b), 4) for b in bbox] if bbox is not None else None,
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+    }
+    if variables is not None:
+        fields["variables"] = sorted(set(variables))
+    if layers is not None:
+        fields["layers"] = sorted(set(int(k) for k in layers))
+    if elements is not None:
+        fields["elements"] = hashlib.sha256(
+            np.unique(np.asarray(elements, dtype=np.int64)).tobytes()
+        ).hexdigest()[:16]
+    key = json.dumps(fields, sort_keys=True)
     return "necofs_volume_" + hashlib.sha256(key.encode()).hexdigest()[:12]
 
 
 def volume(
-    bbox: list[float],
+    bbox: list[float] | None,
     start: str | pd.Timestamp,
     end: str | pd.Timestamp,
     cache: bool = True,
     reader=read_volume,
+    variables: Sequence[str] | None = None,
+    layers: Sequence[int] | None = None,
+    elements: Sequence[int] | None = None,
 ) -> xr.Dataset:
     """`read_volume` for every hour from `start` to `end` inclusive (UTC; naive times are UTC),
     assembled across the daily archive files that hold them.
@@ -972,8 +1104,23 @@ def volume(
     must select the same elements. With `cache`, the result is stored as a zarr store under
     `cache_dir("necofs", "volume")` and later calls with the same box and window read it from
     there. Pad `bbox` yourself if a margin beyond the area of interest is needed (for example for
-    particle tracking near the edge of the subset). `reader` is for tests.
+    particle tracking near the edge of the subset). `variables`, `layers` and `elements` select as
+    in `read_volume`, and are part of the cache key. `reader` is for tests.
     """
+    if bbox is None and elements is None:
+        raise ValueError("volume needs a bbox or elements")
+    _volume_selection(
+        variables, None
+    )  # a bad name fails before any read (layers are checked per file)
+    selection = {
+        k: v
+        for k, v in (
+            ("variables", variables),
+            ("layers", layers),
+            ("elements", elements),
+        )
+        if v is not None
+    }
     import os
     import shutil
 
@@ -988,7 +1135,9 @@ def volume(
     path = None
     if cache:
         path = settings.cache_dir(
-            "necofs", "volume", volume_cache_key(bbox, t0, t1) + ".zarr"
+            "necofs",
+            "volume",
+            volume_cache_key(bbox, t0, t1, variables, layers, elements) + ".zarr",
         )
         if os.path.isdir(path):
             logger.info(f"NECOFS volume from cache {path}")
@@ -1010,7 +1159,7 @@ def volume(
     seen: set[pd.Timestamp] = set()
     for url, ts in groups:
         hours = int((ts[-1] - ts[0]) / pd.Timedelta(hours=1)) + 1
-        part = reader(bbox, ts[0], hours, dap_url=url)
+        part = reader(bbox, ts[0], hours, dap_url=url, **selection)
         if parts and not np.array_equal(
             part["element_id"].values, parts[0]["element_id"].values
         ):

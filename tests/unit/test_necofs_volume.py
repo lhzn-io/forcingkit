@@ -310,3 +310,168 @@ def test_the_cache_key_depends_on_box_window_and_schema():
     assert key == necofs.volume_cache_key(list(INNER), t0, t1)
     assert key != necofs.volume_cache_key((0.9, 0.9, 3.1, 2.2), t0, t1)
     assert key != necofs.volume_cache_key(INNER, t0, t1 + pd.Timedelta(hours=1))
+
+
+# --- a selection: variables, layers, elements ---------------------------------------------------
+
+
+def selected(**sel):
+    times = day_file_times("2026-04-03")
+    return necofs._subset_volume(
+        fvcom_file(times), times, sel.pop("bbox", INNER), times, "test://file", **sel
+    )
+
+
+def test_variables_reads_only_the_fields_asked_for(monkeypatch):
+    read = []
+    real = necofs._read_columns
+
+    def spy(da, dim, idx, t_slice, layers=None):
+        read.append(da.name)
+        return real(da, dim, idx, t_slice, layers)
+
+    monkeypatch.setattr(necofs, "_read_columns", spy)
+    out = selected(variables=["zeta", "u", "v"])
+    assert set(out.variables) >= {
+        "u",
+        "v",
+        "zeta",
+        "h",
+        "siglay",
+        "siglev",
+        "triangles",
+    }
+    assert not {"ww", "temp", "salinity"} & set(out.data_vars)
+    assert not {"ww", "temp", "salinity"} & set(read)
+    full = subset()
+    for name in ("u", "v", "zeta"):
+        np.testing.assert_array_equal(out[name].values, full[name].values)
+    assert out.attrs["variables"] == ["u", "v", "zeta"]  # in VOLUME_FIELDS order
+
+
+def test_layers_keep_the_surface_and_the_bottom_with_their_model_indices():
+    full = subset()
+    out = selected(layers=[-1, 0])
+    np.testing.assert_array_equal(out["layer"].values, [0, NSIG - 1])
+    np.testing.assert_array_equal(out["u"].values, full["u"].values[:, [0, NSIG - 1]])
+    np.testing.assert_array_equal(
+        out["temp"].values, full["temp"].values[:, [0, NSIG - 1]]
+    )
+    np.testing.assert_array_equal(
+        out["siglay"].values, full["siglay"].values[[0, NSIG - 1]]
+    )
+    np.testing.assert_array_equal(
+        out["siglev"].values, full["siglev"].values
+    )  # every interface
+    np.testing.assert_array_equal(
+        out["zeta"].values, full["zeta"].values
+    )  # not layered
+    assert "layer" not in full.coords  # a whole volume is as it was
+
+
+def test_adjacent_layers_come_in_one_read_per_column_run(monkeypatch):
+    slabs = []
+    real = xr.DataArray.isel
+
+    def spy(self, indexers=None, **kw):
+        if self.name == "u" and indexers and "siglay" in indexers:
+            slabs.append(indexers["siglay"])
+        return real(self, indexers, **kw)
+
+    monkeypatch.setattr(xr.DataArray, "isel", spy)
+    out = selected(variables=["u"], layers=[1, 2])
+    assert slabs and all(s == slice(1, 3) for s in slabs)
+    np.testing.assert_array_equal(out["layer"].values, [1, 2])
+
+
+def test_elements_replace_the_box():
+    full = subset()
+    pick = full["element_id"].values[[2, 0]]
+    out = selected(bbox=None, elements=list(pick))
+    np.testing.assert_array_equal(out["element_id"].values, np.sort(pick))
+    for i, e in enumerate(out["element_id"].values):
+        j = int(np.flatnonzero(full["element_id"].values == e)[0])
+        np.testing.assert_array_equal(
+            out["u"].values[:, :, i], full["u"].values[:, :, j]
+        )
+    assert out.attrs["requested_elements"] == 2 and out.attrs["requested_bbox"] == []
+
+
+@pytest.mark.parametrize(
+    "sel",
+    [
+        {"variables": ["speed"]},
+        {"variables": []},
+        {"layers": []},
+        {"layers": [NSIG]},
+        {"layers": [-NSIG - 1]},
+        {"bbox": None, "elements": []},
+        {"bbox": None, "elements": [10_000]},
+    ],
+)
+def test_a_bad_selection_raises(sel):
+    with pytest.raises(ValueError):
+        selected(**sel)
+
+
+def test_read_volume_needs_a_box_or_elements():
+    with pytest.raises(ValueError):
+        necofs.read_volume(None, "2026-04-02T00", 2, dap_url="test://file")
+
+
+def test_the_cache_key_of_a_whole_volume_is_unchanged_and_a_selection_has_its_own():
+    t0, t1 = pd.Timestamp("2026-04-02"), pd.Timestamp("2026-04-03")
+    whole = necofs.volume_cache_key(INNER, t0, t1)
+    assert whole == necofs.volume_cache_key(INNER, t0, t1, None, None, None)
+    surface = necofs.volume_cache_key(INNER, t0, t1, layers=[0])
+    assert surface not in (
+        whole,
+        necofs.volume_cache_key(INNER, t0, t1, layers=[0, -1]),
+    )
+    assert necofs.volume_cache_key(
+        INNER, t0, t1, variables=["v", "u"]
+    ) == necofs.volume_cache_key(INNER, t0, t1, variables=["u", "v"])
+    by_el = necofs.volume_cache_key(None, t0, t1, elements=[5, 3])
+    assert by_el == necofs.volume_cache_key(None, t0, t1, elements=[3, 5, 5])
+    assert by_el != necofs.volume_cache_key(None, t0, t1, elements=[3, 6])
+
+
+def test_volume_passes_a_selection_to_each_file_and_caches_it_apart(archive):
+    reader, reads = archive
+    seen = []
+
+    def selecting(bbox, start, hours, dap_url=None, **sel):
+        seen.append(sel)
+        stamp = dap_url.removeprefix("file://")
+        reads.append(stamp)
+        times = day_file_times(stamp.replace("_", "-"))
+        wanted = pd.date_range(pd.Timestamp(start), periods=hours, freq="1h")
+        return necofs._subset_volume(
+            fvcom_file(times), times, bbox, wanted, dap_url, **sel
+        )
+
+    sel = {"variables": ["u", "zeta"], "layers": [0, -1]}
+    part = necofs.volume(
+        INNER, "2026-04-02T05", "2026-04-02T08", reader=selecting, **sel
+    )
+    assert seen == [sel]
+    assert set(part.data_vars) & set(necofs.VOLUME_FIELDS) == {"u", "zeta"}
+    np.testing.assert_array_equal(part["layer"].values, [0, NSIG - 1])
+    n = len(reads)
+    again = necofs.volume(
+        INNER, "2026-04-02T05", "2026-04-02T08", reader=selecting, **sel
+    )
+    assert len(reads) == n  # from the cache
+    xr.testing.assert_identical(part.drop_attrs(), again.drop_attrs())
+    whole = necofs.volume(INNER, "2026-04-02T05", "2026-04-02T08", reader=reader)
+    assert (
+        len(reads) > n and "temp" in whole
+    )  # a whole volume does not take the selection's cache entry
+    with pytest.raises(ValueError):
+        necofs.volume(
+            INNER,
+            "2026-04-02T05",
+            "2026-04-02T08",
+            reader=selecting,
+            variables=["speed"],
+        )

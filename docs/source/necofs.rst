@@ -320,6 +320,33 @@ dap_url=None)`` does the same for one file.
      - (element); (node)
      - Indices in the full mesh.
 
+Reading less
+~~~~~~~~~~~~
+
+By default every layer of every field comes back. Three optional arguments, to ``read_volume``
+and ``volume`` alike, read only part of it, which matters for wide areas: all 45 layers of the six
+fields over Long Island Sound (16,010 elements) are about 300 MB a day.
+
+``variables``
+   The time-varying fields to read, among ``VOLUME_FIELDS`` (``u``, ``v``, ``ww``, ``temp``,
+   ``salinity``, ``zeta``). The static fields and coordinates always come.
+``layers``
+   Zero-based sigma layer indices, surface first; negative ones count from the bottom, so
+   ``[0, -1]`` is the surface and the bottom layer. The layered fields and ``siglay`` hold those
+   layers only, sorted, with their model indices in a ``layer`` coordinate; ``siglev`` keeps every interface,
+   so layer ``k``'s interfaces are ``siglev[k]`` and ``siglev[k + 1]``. Adjacent layers are read
+   in one hyperslab.
+``elements``
+   Zero-based element indices in the full mesh (as ``element_id`` returns them), read in place of
+   the elements of ``bbox``, which may then be ``None``: for a line through the mesh or another
+   scattered set, where a box around it would read far more.
+
+.. code-block:: python
+
+   # The surface and the bottom of the whole Sound, with the surface elevation: about 7 MB a day.
+   sound = volume([-73.9, 40.45, -71.8, 41.45], "2026-11-01T00Z", "2026-11-02T00Z",
+                  variables=["u", "v", "zeta"], layers=[0, -1])
+
 The archive does not carry FVCOM's edge-neighbour table, so ``neighbours`` and ``on_boundary`` are
 rebuilt from ``nv`` over the **whole** mesh (``forcingkit.mesh_frames.element_neighbours``): on
 the subset alone, every element along the subset's edge would look like a coastal element.
@@ -327,7 +354,8 @@ the subset alone, every element along the subset's edge would look like a coasta
 Every requested hour must be found, and every archive file must select the same elements;
 otherwise ``volume`` raises. Results are cached as Zarr under
 ``$FORCINGKIT_CACHE_DIR/necofs/volume/``, keyed by the schema (``volume-v1``), the box and the
-window. Hyperslabs are fetched with ``FORCINGKIT_MAX_WORKERS`` threads. Even so, the 48 hours
+window, and by the selection when there is one: a whole volume keeps the key it had before
+selections existed, and a selection never shares a key with a whole volume. Hyperslabs are fetched with ``FORCINGKIT_MAX_WORKERS`` threads. Even so, the 48 hours
 above (2,831 elements, 1,829 nodes, 45 layers, about 110 MB) took about five minutes from SMAST
 on 2026-10-22, almost all of it server round trips, and 0.1 s from the cache.
 
