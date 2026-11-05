@@ -123,8 +123,10 @@ Planned work
      - Modules in ``forcingkit.fetchers`` are named for their source (``necofs``, ``hycom``,
        ``ndbc``, ``coastwatch``, ``usgs``), and a model-ready delivery for the source and what it
        delivers (``hrrr_atmosphere``, ``usgs_rivers``). Three predate the convention:
-       ``noaa.py`` serves CO-OPS water levels and current predictions (``coops.py``),
-       ``erddap.py`` serves the UConn profile stations (named for the protocol, not the source),
+       ``noaa.py`` serves CO-OPS water levels and current predictions (``coops.py``; since
+       0.14.0 a thin layer over ``insitukit.coops``, which may replace it outright),
+       ``erddap.py`` serves the UConn profile stations (named for the protocol, not the source;
+       a move to ``insitukit.erddap`` waits for its expiring failure cache and parallel reads),
        and ``hydrography.py`` finds heads of tide from OpenStreetMap (``osm.py`` or similar).
        Renaming them breaks imports from earlier releases, so it belongs in a release that says
        so, with the old names kept as deprecated aliases for one release.

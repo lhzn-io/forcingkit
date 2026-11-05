@@ -1,66 +1,69 @@
 """CO-OPS water level: NAVD88 where a station has it, MSL where it does not."""
 
-from unittest import mock
+import pytest
+from insitukit import coops
 
 from forcingkit.fetchers import noaa
 
-
-class FakeResponse:
-    def __init__(self, payload, status=200):
-        self._payload = payload
-        self.status_code = status
-        self.content = b"x"
-
-    def json(self):
-        return self._payload
-
-    def raise_for_status(self):
-        if self.status_code >= 400:
-            raise RuntimeError(f"HTTP {self.status_code}")
+STATION = {"name": "New Haven", "lat": 41.2833, "lng": -72.9083}
 
 
-def _fetch(tmp_path, responses):
+def _fetch(tmp_path, monkeypatch, answers):
+    """Run the fetcher with insitukit's CO-OPS calls answered by ``answers[datum]``."""
     calls = []
 
-    def fake_get(url, params, timeout):
+    def fake_get(params):
         calls.append(params["datum"])
-        return responses[params["datum"]]
+        answer = answers[params["datum"]]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
 
-    with mock.patch.object(noaa.requests, "get", side_effect=fake_get):
-        data = noaa.fetch_noaa_tide_data(
-            "8465705",
-            "2026-04-02T00:00:00",
-            "2026-04-02T04:00:00",
-            cache_dir=str(tmp_path),
-        )
+    monkeypatch.setattr(coops, "_get", fake_get)
+    monkeypatch.setattr(coops, "_md", lambda path, params=None: {"stations": [STATION]})
+    data = noaa.fetch_noaa_tide_data(
+        "8465705",
+        "2026-04-02T00:00:00",
+        "2026-04-02T04:00:00",
+        cache_dir=str(tmp_path),
+    )
     return data, calls
 
 
-def test_falls_back_to_msl_when_navd_is_unsupported(tmp_path):
-    rows = {
-        "metadata": {"id": "8465705"},
-        "data": [{"t": "2026-04-02 00:00", "v": "0.1"}],
-    }
-    data, calls = _fetch(
-        tmp_path,
-        {
-            "NAVD": FakeResponse(
-                {
-                    "error": {
-                        "message": " The supported Datum values are: MHHW, MHW, MTL, MSL"
-                    }
-                },
-                status=400,
-            ),
-            "MSL": FakeResponse(rows),
-        },
+ROWS = {
+    "data": [
+        {"t": "2026-04-02 00:00", "v": "0.1", "s": "0.003", "f": "0,0,0,0", "q": "p"},
+        {"t": "2026-04-02 04:00", "v": "", "s": "", "f": "1,1,1,1", "q": "p"},
+    ]
+}
+
+
+def test_falls_back_to_msl_when_navd_is_unsupported(tmp_path, monkeypatch):
+    unsupported = coops.DatumUnavailable(
+        " The supported Datum values are: MHHW, MHW, MTL, MSL"
     )
+    data, calls = _fetch(tmp_path, monkeypatch, {"NAVD": unsupported, "MSL": ROWS})
     assert calls == ["NAVD", "MSL"]
     assert data["metadata"]["datum"] == "MSL"
 
 
-def test_uses_navd_when_available(tmp_path):
-    rows = {"metadata": {"id": "8516945"}, "data": []}
-    data, calls = _fetch(tmp_path, {"NAVD": FakeResponse(rows)})
+def test_keeps_the_co_ops_shape_with_the_end_included(tmp_path, monkeypatch):
+    data, calls = _fetch(tmp_path, monkeypatch, {"NAVD": ROWS})
     assert calls == ["NAVD"]
-    assert data["metadata"]["datum"] == "NAVD"
+    assert data["metadata"] == {
+        "id": "8465705",
+        "name": "New Haven",
+        "lat": "41.2833",
+        "lon": "-72.9083",
+        "datum": "NAVD",
+    }
+    # The reading at end_time is kept; a missing reading is an empty string, as CO-OPS sends it.
+    assert data["data"] == [
+        {"t": "2026-04-02 00:00", "v": "0.1"},
+        {"t": "2026-04-02 04:00", "v": ""},
+    ]
+
+
+def test_an_empty_window_is_an_error(tmp_path, monkeypatch):
+    with pytest.raises(RuntimeError, match="No data"):
+        _fetch(tmp_path, monkeypatch, {"NAVD": None})

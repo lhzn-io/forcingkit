@@ -29,6 +29,16 @@ from forcingkit_serve.routers import (  # noqa: E402
     stores,
 )
 from forcingkit.fetchers.noaa import fetch_noaa_tide_data  # noqa: E402
+from importlib.metadata import version as _package_version  # noqa: E402
+
+import insitukit  # noqa: E402
+
+# Every CO-OPS request (through insitukit) names this service. Set here, not in the library, so a
+# program that imports forcingkit keeps its own identity.
+insitukit.identify(
+    f"forcingkit/{_package_version('forcingkit')} (+https://github.com/lhzn-io/forcingkit)",
+    application="forcingkit",
+)
 
 # Configure Logging
 log_dir = Path("logs")

@@ -146,7 +146,11 @@ These serve validation rather than forcing:
 
 - **CO-OPS** water level (``/api/v1/tide``), from the `NOAA CO-OPS data API
   <https://api.tidesandcurrents.noaa.gov/api/prod/>`__, with a datum
-  fallback to MSL where a station has no NAVD88 datum.
+  fallback to MSL where a station has no NAVD88 datum. Requests go through
+  `insitukit <https://github.com/lhzn-io/insitukit>`__, which keeps them at least 1 s apart,
+  splits windows longer than the API's 31-day limit, and retries server errors and throttling;
+  ``end_time`` is inclusive, as in the API. Current predictions (``/api/v1/currents``) and the
+  current-station list (``/api/v1/currents/stations``) use the same client.
 - **NDBC** buoy meteorology and ADCP profiles (``/api/v1/ndbc``), from the `NOAA National Data
   Buoy Center <https://www.ndbc.noaa.gov/>`__.
 - **UConn ERDDAP** water-column profiles (``/api/v1/telemetry/station`` and ``/bbox``), from the
