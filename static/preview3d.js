@@ -1,11 +1,12 @@
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import CameraControls from 'camera-controls';
+import { createVantage } from 'vantagekit/three';
 
 // - State -
 let renderer = null;
 let scene = null;
 let camera = null;
-let controls = null;
+let nav = null;   // vantagekit: orbit and fly, keys (while the canvas has focus), gamepad, touch
 let arrowGroup = null;
 let animId = null;
 let legendHost = null;
@@ -137,9 +138,14 @@ function initThree(container) {
     camera = new THREE.PerspectiveCamera(55, container.clientWidth / container.clientHeight, 0.1, 5000);
     camera.position.set(0, 150, 250);
 
-    controls = new OrbitControls(camera, canvas);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.08;
+    // The scene is about 200 units across whatever the dataset's size, so metres per unit is set
+    // per dataset (buildVectorField). The keyboard acts only while the canvas has focus, so the
+    // page's own keys and scrolling keep working.
+    nav = createVantage({
+        THREE, CameraControls, camera, dom: canvas,
+        metresPerUnit: 1, exaggeration: DEPTH_EXAG * DEPTH_BASE_MULT,
+        keys: 'focus', minDistance: 0.5, smoothTime: 0.2,
+    });
 
     // Lighting: ambient + directional + uplight for subsurface visibility
     scene.add(new THREE.AmbientLight(0x404060, 0.8));
@@ -155,9 +161,10 @@ function initThree(container) {
     const grid = new THREE.GridHelper(200, 20, 0x1a2030, 0x1a2030);
     scene.add(grid);
 
+    const clock = new THREE.Clock();
     function animate() {
         animId = requestAnimationFrame(animate);
-        controls.update();
+        nav.update(clock.getDelta());
         renderer.render(scene, camera);
     }
     animate();
@@ -200,6 +207,7 @@ function buildVectorField(data, fitCamera) {
     const latSpan = Math.max(latMax - latMin, 0.001) * degToM;
     const maxSpan = Math.max(lonSpan, latSpan);
     const sceneScale = 200 / maxSpan;
+    nav.metresPerUnit = 1 / sceneScale;   // movement speeds and readouts in real metres
 
     // Compute max magnitude
     let maxMag = 0;
@@ -282,9 +290,8 @@ function buildVectorField(data, fitCamera) {
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
     const dist = Math.max(size.x, size.y, size.z) * 1.2;
-    controls.target.copy(center);
-    camera.position.set(center.x + dist * 0.3, center.y + dist * 0.5, center.z + dist * 0.8);
-    controls.update();
+    nav.setLookAt([center.x + dist * 0.3, center.y + dist * 0.5, center.z + dist * 0.8], center);
+    nav.saveHome();   // the Home key and pad A return here
 }
 
 // - Public API (called from app.js) -
@@ -295,7 +302,9 @@ window.preview3d = {
         // Re-init if canvas was destroyed (e.g. by 2D preview's innerHTML wipe)
         const existing = document.getElementById('preview3dCanvas');
         if (!renderer || !existing) {
-            if (renderer) { renderer.dispose(); renderer = null; scene = null; camera = null; controls = null; }
+            if (animId) cancelAnimationFrame(animId);
+            if (nav) nav.dispose();
+            if (renderer) { renderer.dispose(); renderer = null; scene = null; camera = null; nav = null; }
             initThree(container);
         }
         const canvas = document.getElementById('preview3dCanvas');
@@ -333,8 +342,9 @@ window.preview3d = {
     dispose() {
         clearArrows();
         if (animId) cancelAnimationFrame(animId);
+        if (nav) nav.dispose();
         if (renderer) renderer.dispose();
-        renderer = null; scene = null; camera = null; controls = null;
+        renderer = null; scene = null; camera = null; nav = null;
         this.active = false;
     }
 };
