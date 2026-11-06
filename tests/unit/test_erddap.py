@@ -46,18 +46,18 @@ def clean_failures(monkeypatch):
 
 @pytest.fixture
 def fake_get(monkeypatch):
-    """Replace requests.get in the fetcher; `behaviour(url, timeout)` returns or raises."""
+    """Replace requests.Session.get (insitukit's client); `behaviour(url, timeout)` returns or raises."""
     lock = threading.Lock()
 
     def install(behaviour):
         calls: list[tuple[str, object]] = []
 
-        def get(url, timeout=None):
+        def get(self, url, timeout=None):
             with lock:
                 calls.append((url, timeout))
             return behaviour(url, timeout)
 
-        monkeypatch.setattr(erddap.requests, "get", get)
+        monkeypatch.setattr(requests.Session, "get", get)
         return calls
 
     return install
@@ -177,7 +177,7 @@ def test_failures_are_negatively_cached(fake_get, tmp_path):
 
 def test_negative_cache_expires(fake_get, monkeypatch, tmp_path):
     clock = [1000.0]
-    monkeypatch.setattr(erddap.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
     monkeypatch.setenv("FORCINGKIT_ERDDAP_FAILURE_TTL", "60")
     calls = fake_get(lambda url, timeout: FakeResponse(status_code=503, text=""))
 
@@ -235,7 +235,7 @@ def test_cached_csv_is_served_while_the_host_is_down(fake_get, tmp_path):
 
 def test_bbox_with_no_known_station_is_empty_and_fetches_nothing(mocker, tmp_path):
     fetch = mocker.patch("forcingkit.fetchers.erddap.fetch_erddap_station_profiles")
-    get = mocker.patch("forcingkit.fetchers.erddap.requests.get")
+    get = mocker.patch("requests.Session.get")
 
     assert (
         erddap.fetch_erddap_stations_in_bbox(OFFSHORE_NJ, START, END, str(tmp_path))
@@ -313,7 +313,7 @@ def _bbox_body(bbox, **extra):
 
 @pytest.mark.asyncio
 async def test_bbox_route_with_no_station_returns_empty(mocker):
-    get = mocker.patch("forcingkit.fetchers.erddap.requests.get")
+    get = mocker.patch("requests.Session.get")
     async with AsyncClient(
         transport=ASGITransport(app=_app()), base_url="http://test"
     ) as ac:
@@ -363,7 +363,7 @@ async def test_bbox_route_reports_skipped_datasets(mocker, tmp_path):
             cache_dir=str(tmp_path), **kw
         ),
     )
-    mocker.patch("forcingkit.fetchers.erddap.requests.get", side_effect=down)
+    mocker.patch("requests.Session.get", side_effect=down)
     async with AsyncClient(
         transport=ASGITransport(app=_app()), base_url="http://test"
     ) as ac:

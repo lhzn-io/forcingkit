@@ -163,7 +163,9 @@ These serve validation rather than forcing:
   has a 10 s connect and 60 s read timeout (``FORCINGKIT_ERDDAP_CONNECT_TIMEOUT``,
   ``FORCINGKIT_ERDDAP_READ_TIMEOUT``). A host that fails to connect, or a dataset that times out
   or errors, is skipped for 300 s (``FORCINGKIT_ERDDAP_FAILURE_TTL``, 0 to turn off), and the
-  response's ``skipped`` lists each dataset left out, with the reason.
+  response's ``skipped`` lists each dataset left out, with the reason. A station's three datasets
+  are read at once, through `insitukit <https://github.com/lhzn-io/insitukit>`__'s ERDDAP client
+  (one attempt each, starting at least 0.2 s apart).
 
 NOAA OFS archive locations
 --------------------------

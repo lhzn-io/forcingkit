@@ -1,15 +1,12 @@
-import io
 import logging
 import math
 import os
-import threading
-import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from typing import Optional
-from urllib.parse import urlsplit
 
 import pandas as pd
-import requests
+from insitukit.erddap import DatasetMissing, Erddap, FailureCache, Unavailable
 
 from forcingkit import settings
 
@@ -17,49 +14,12 @@ logger = logging.getLogger(__name__)
 
 BASE_ERDDAP_URL = "http://merlin.dms.uconn.edu:8080/erddap"
 
-
-class ErddapUnavailable(Exception):
-    """A dataset was not read, because its host or the dataset failed now or recently."""
-
-
-class _FailureCache:
-    """Hosts and datasets that failed recently, skipped until their entry expires.
-
-    A host is recorded when a connect fails (refused, unreachable or timed out), so the other
-    datasets on it, in this request and the next few, are skipped instead of each waiting out the
-    connect timeout. A dataset is recorded when its read times out or the server returns a 5xx.
-    The lifetime is settings.erddap_failure_ttl(); 0 records nothing.
-    """
-
-    def __init__(self) -> None:
-        self._entries: dict[str, tuple[float, str]] = {}
-        self._lock = threading.Lock()
-
-    def record(self, key: str, reason: str) -> None:
-        ttl = settings.erddap_failure_ttl()
-        if ttl <= 0:
-            return
-        with self._lock:
-            self._entries[key] = (time.monotonic() + ttl, reason)
-
-    def check(self, key: str) -> Optional[str]:
-        """The recorded reason while `key` is still failed, else None."""
-        with self._lock:
-            entry = self._entries.get(key)
-            if entry is None:
-                return None
-            expires, reason = entry
-            if time.monotonic() >= expires:
-                del self._entries[key]
-                return None
-            return reason
-
-    def clear(self) -> None:
-        with self._lock:
-            self._entries.clear()
-
-
-_failures = _FailureCache()
+# Hosts and datasets that failed recently, shared by every request this process serves. A host is
+# recorded when a connect fails (refused, unreachable or timed out), so the other datasets on it, in
+# this request and the next few, are skipped instead of each waiting out the connect timeout. A
+# dataset is recorded when its read times out or the server returns a 5xx. The lifetime is
+# settings.erddap_failure_ttl(); 0 records nothing.
+_failures = FailureCache()
 
 
 def clear_failure_cache() -> None:
@@ -67,64 +27,61 @@ def clear_failure_cache() -> None:
     _failures.clear()
 
 
+def _server() -> Erddap:
+    """An insitukit client for the UConn server, built per call so the settings are read each time:
+    one attempt per dataset, the configured timeouts, and the shared failure cache."""
+    connect, read = settings.erddap_timeouts()
+    return Erddap(
+        BASE_ERDDAP_URL,
+        budget=None,
+        min_interval=0.2,
+        retries=1,
+        connect_timeout=connect,
+        timeout=read,
+        failure_ttl=settings.erddap_failure_ttl(),
+        failures=_failures,
+        fmt="csvp",
+    )
+
+
+def _utc(stamp: str) -> datetime:
+    ts = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    return (
+        ts.replace(tzinfo=timezone.utc)
+        if ts.tzinfo is None
+        else ts.astimezone(timezone.utc)
+    )
+
+
 def _read_dataset(
-    dataset_name: str, start_time: str, end_time: str
+    server: Erddap, dataset_name: str, start_time: str, end_time: str
 ) -> Optional[pd.DataFrame]:
     """One dataset's temperature series from ERDDAP, indexed by UTC time.
 
-    Returns None when ERDDAP has no rows for the window (HTTP 404). Raises ErddapUnavailable when
-    the host or dataset is negatively cached, or when this read fails.
+    Returns None when ERDDAP has no rows for the window (any HTTP 404). Raises
+    insitukit.erddap.Unavailable when the host or dataset is negatively cached or this read fails,
+    and ValueError when the response cannot be parsed.
     """
-    host = urlsplit(BASE_ERDDAP_URL).netloc
-    host_key = f"host:{host}"
-    dataset_key = f"dataset:{dataset_name}"
-    for key in (host_key, dataset_key):
-        reason = _failures.check(key)
-        if reason is not None:
-            raise ErddapUnavailable(f"skipped after a recent failure: {reason}")
-
-    query_url = f"{BASE_ERDDAP_URL}/tabledap/{dataset_name}.csvp?time,sea_water_temperature&time%3E={start_time}&time%3C={end_time}"
     logger.info(
         f"Fetching ERDDAP data for {dataset_name} ({start_time} to {end_time})..."
     )
     try:
-        response = requests.get(query_url, timeout=settings.erddap_timeouts())
-    except requests.ConnectionError as e:
-        # Includes ConnectTimeout: the host is unreachable, so skip it for a while.
-        reason = f"{host} unreachable ({type(e).__name__})"
-        _failures.record(host_key, reason)
-        raise ErddapUnavailable(reason) from e
-    except requests.Timeout as e:
-        reason = f"{dataset_name} read timed out"
-        _failures.record(dataset_key, reason)
-        raise ErddapUnavailable(reason) from e
-    except requests.RequestException as e:
-        raise ErddapUnavailable(
-            f"{dataset_name} request failed ({type(e).__name__})"
-        ) from e
-
-    if response.status_code == 404:
-        # ERDDAP answers 404 when the query matches no rows.
+        df = server.fetch(
+            dataset_name,
+            _utc(start_time),
+            _utc(end_time),
+            ["sea_water_temperature"],
+        )
+    except DatasetMissing:
         logger.info(f"ERDDAP has no rows for {dataset_name} in the window")
         return None
-    if response.status_code >= 500:
-        reason = f"{dataset_name} returned HTTP {response.status_code}"
-        _failures.record(dataset_key, reason)
-        raise ErddapUnavailable(reason)
-    if response.status_code != 200:
-        raise ErddapUnavailable(f"{dataset_name} returned HTTP {response.status_code}")
-
-    try:
-        df = pd.read_csv(io.StringIO(response.text))
-        if df.empty:
-            return None
-        # The headers are like "time (UTC)" and "sea_water_temperature (celsius)".
-        df.columns = ["time", "sea_water_temperature"]
-        df = df.set_index("time")
-        df.index = pd.to_datetime(df.index, utc=True)
+    except Unavailable:
+        raise
     except Exception as e:
-        raise ErddapUnavailable(f"{dataset_name} could not be parsed ({e})") from e
-    return df
+        raise ValueError(f"{dataset_name} could not be parsed ({e})") from e
+    if df.empty:
+        return None
+    return df.set_index("time")
 
 
 def fetch_erddap_station_profiles(
@@ -169,6 +126,8 @@ def fetch_erddap_station_profiles(
     if station_upper == "ARTG":
         datasets["bottom"] = "ARTG_WQ_BTM_1"
 
+    server = _server()
+
     def load(
         level: str, dataset_name: str
     ) -> tuple[Optional[pd.DataFrame], Optional[dict]]:
@@ -181,8 +140,8 @@ def fetch_erddap_station_profiles(
             logger.info(f"Cache hit for {dataset_name}: {cache_path}")
             return pd.read_csv(cache_path, index_col=0, parse_dates=True), None
         try:
-            df = _read_dataset(dataset_name, start_time, end_time)
-        except ErddapUnavailable as e:
+            df = _read_dataset(server, dataset_name, start_time, end_time)
+        except (Unavailable, ValueError) as e:
             logger.error(f"Failed fetching or parsing ERDDAP for {dataset_name}: {e}")
             return None, {
                 "station": station_upper,
