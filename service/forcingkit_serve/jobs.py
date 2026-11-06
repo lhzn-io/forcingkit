@@ -104,6 +104,15 @@ class JobRegistry:
         job = self.get(job_id)
         return job is not None and job.status in ACTIVE
 
+    def forget(self, job_id: Optional[str] = None) -> None:
+        """Drop the finished job under `job_id`, or every finished job, once its store has been
+        deleted. An active job is kept: its build is still writing the store."""
+        with self._lock:
+            for key in [job_id] if job_id is not None else list(self._jobs):
+                job = self._jobs.get(key)
+                if job is not None and job.status not in ACTIVE:
+                    del self._jobs[key]
+
     def _run(self, job: Job, build: Callable[[], Dict[str, Any]]) -> None:
         job.status, job.started = "running", _now()
         try:

@@ -217,6 +217,9 @@ async def purge_cache() -> Dict[str, str]:
         try:
             shutil.rmtree(cache_dir)
             os.makedirs(cache_dir, exist_ok=True)
+            from forcingkit_serve.jobs import registry
+
+            registry.forget()
             return {"status": "success", "message": "Cache purged successfully."}
         except Exception as e:
             logger.error(f"Failed to purge cache: {e}")
@@ -760,10 +763,13 @@ def _submit(
     from forcingkit_serve.routers.stores import store_complete
 
     kind = JOB_KINDS[zarr_id.split("_", 1)[0]]
-    if not cache_bust and not registry.is_active(zarr_id) and store_complete(zarr_path):
+    complete = store_complete(zarr_path)
+    if not cache_bust and not registry.is_active(zarr_id) and complete:
         job = registry.finished(zarr_id, kind, cached())
     else:
-        job = registry.submit(zarr_id, kind, build, rebuild=cache_bust)
+        # A succeeded job whose store is no longer complete (deleted from the cache since) is
+        # stale: rebuild rather than return it.
+        job = registry.submit(zarr_id, kind, build, rebuild=cache_bust or not complete)
     return JSONResponse(status_code=202, content=_job_view(job, http))
 
 
@@ -827,6 +833,14 @@ def get_job(job_id: str, http: Request) -> Dict[str, Any]:
     if not STORE_ID.match(job_id):
         raise HTTPException(status_code=400, detail="invalid job id")
     job = registry.get(job_id)
+    if (
+        job is not None
+        and job.result is not None
+        and not store_complete(job.result["zarr_path"])
+    ):
+        # Its store was deleted after the build: the job no longer has a result to report.
+        registry.forget(job_id)
+        job = None
     if job is None:
         zarr_path = os.path.join(settings.cache_dir(), f"{job_id}.zarr")
         if not store_complete(zarr_path):

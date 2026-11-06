@@ -470,6 +470,10 @@ async def delete_dataset(dataset_id: str):
             old_sidecar = zarr_path.parent / f"{dataset_id}_metadata.json"
             if old_sidecar.exists():
                 old_sidecar.unlink()
+            # A finished job for this store would otherwise still report it as built.
+            from forcingkit_serve.jobs import registry
+
+            registry.forget(dataset_id)
             logger.info(f"Deleted Zarr dataset: {zarr_path}")
             return {"status": "success", "message": f"Deleted {dataset_id}"}
 

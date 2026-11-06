@@ -137,6 +137,75 @@ def test_store_finished_before_restart_is_a_succeeded_job(client):
     assert body["status"] == "succeeded" and body["result"]["id"] == zarr_id
 
 
+def test_registry_rebuilds_succeeded_job_on_request_and_forgets_finished_ones():
+    registry = jobs.JobRegistry(workers=1)
+    release = threading.Event()
+    first = registry.submit("obc_0123456789ab", "ocean", lambda: {"n": 1})
+    deadline = time.monotonic() + 5
+    while first.status != "succeeded" and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert first.status == "succeeded"
+    assert registry.submit("obc_0123456789ab", "ocean", lambda: {"n": 2}) is first
+
+    def slow_build():
+        release.wait(5)
+        return {"n": 3}
+
+    rebuilt = registry.submit("obc_0123456789ab", "ocean", slow_build, rebuild=True)
+    assert rebuilt is not first
+
+    # An active job survives forget; a finished one does not.
+    registry.forget("obc_0123456789ab")
+    registry.forget()
+    assert registry.get("obc_0123456789ab") is rebuilt
+    release.set()
+    while rebuilt.status != "succeeded" and time.monotonic() < deadline:
+        time.sleep(0.01)
+    registry.forget("obc_0123456789ab")
+    assert registry.get("obc_0123456789ab") is None
+
+
+def _built_obc_job(client, monkeypatch, calls):
+    def fake_dispatch(**kwargs):
+        calls.append(kwargs)
+        _write_store(kwargs["zarr_path"])
+        return kwargs["zarr_path"]
+
+    monkeypatch.setattr(dispatcher, "dispatch_obc_request", fake_dispatch)
+    body = client.post("/api/v1/jobs/obc", json=OBC).json()
+    assert _wait(client, body["status_url"])["status"] == "succeeded"
+    return body
+
+
+def test_succeeded_job_whose_store_vanished_is_rebuilt(client, monkeypatch):
+    import shutil
+
+    calls = []
+    body = _built_obc_job(client, monkeypatch, calls)
+    _, zarr_path, _ = main._obc_store(main.OBCRequest(**OBC))
+    shutil.rmtree(zarr_path)  # removed behind the service's back, registry untouched
+
+    assert client.get(body["status_url"]).status_code == 404
+    again = client.post("/api/v1/jobs/obc", json=OBC)
+    assert again.status_code == 202
+    done = _wait(client, again.json()["status_url"])
+    assert done["status"] == "succeeded" and len(calls) == 2
+    assert done["result"]["id"] == body["job_id"]
+
+
+def test_deleting_a_store_drops_its_job(client, monkeypatch):
+    calls = []
+    body = _built_obc_job(client, monkeypatch, calls)
+    deleted = client.delete(f"/api/v1/cache/dataset/{body['job_id']}")
+    assert deleted.status_code == 200
+    assert jobs.registry.get(body["job_id"]) is None
+
+    again = client.post("/api/v1/jobs/obc", json=OBC)
+    assert again.status_code == 202
+    assert _wait(client, again.json()["status_url"])["status"] == "succeeded"
+    assert len(calls) == 2
+
+
 def test_unknown_and_invalid_job_ids(client):
     assert client.get("/api/v1/jobs/obc_000000000000").status_code == 404
     assert client.get("/api/v1/jobs/not-a-store").status_code == 400
