@@ -71,6 +71,11 @@ def fetch_product(
     return df[df.index <= _utc_naive(end)], sources
 
 
+def _real_time(sources: list[str]) -> bool:
+    """Whether any source is one of NDBC's real-time files (not yet quality controlled)."""
+    return any("/data/realtime2/" in s for s in sources)
+
+
 def _list(values) -> list:
     return [
         None if (v is None or (isinstance(v, float) and math.isnan(v))) else float(v)
@@ -92,8 +97,11 @@ def fetch_ndbc(
     stdmet: times plus the columns of `STDMET_COLUMNS`. adcp: times, the bin depth and the
     current as eastward and northward components (m/s); NDBC reports speed in cm/s and the
     direction the current flows toward, in degrees true. Missing values are null. A window that
-    ended more than two days ago is cached as JSON under `cache_dir`. `get` (a URL to text or
-    None) and `position` exist so tests can run without the network.
+    ended more than two days ago is cached as JSON under `cache_dir`, unless any of it came from
+    NDBC's real-time files: those readings have not been through NDBC's quality control yet, and
+    the monthly and yearly files that replace them have, so such a window is fetched again until
+    they cover it. `get` (a URL to text or None) and `position` exist so tests can run without the
+    network.
     """
     start, end = _utc_naive(start_time), _utc_naive(end_time)
     unknown = set(products) - set(PRODUCTS)
@@ -107,7 +115,9 @@ def fetch_ndbc(
         cache_path = os.path.join(cache_dir, "ndbc", f"{key}.json")
         if os.path.exists(cache_path):
             with open(cache_path) as f:
-                return json.load(f)
+                cached = json.load(f)
+            if not _real_time(cached.get("sources", [])):
+                return cached
 
     lat, lon = position if position is not None else station_position(station, get)
     out: dict = {
@@ -146,8 +156,10 @@ def fetch_ndbc(
                 },
             }
 
-    if cache_path and end < pd.Timestamp.utcnow().tz_localize(None) - pd.Timedelta(
-        days=2
+    if (
+        cache_path
+        and end < pd.Timestamp.utcnow().tz_localize(None) - pd.Timedelta(days=2)
+        and not _real_time(out["sources"])
     ):
         with open(cache_path, "w") as f:
             json.dump(out, f)

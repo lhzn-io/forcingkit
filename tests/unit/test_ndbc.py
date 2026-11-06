@@ -95,3 +95,29 @@ def test_unknown_product_is_refused():
         ndbc.fetch_ndbc(
             "44091", "2026-04-02", "2026-04-03", ("waves",), position=(0, 0)
         )
+
+
+def _counting(files):
+    asked = []
+    inner = _fixture_get(files)
+
+    def get(url):
+        asked.append(url)
+        return inner(url)
+
+    return get, asked
+
+
+def test_only_quality_controlled_windows_are_cached(tmp_path):
+    window = ("44091", "2026-04-02T00:00:00Z", "2026-04-02T23:59:00Z", ("stdmet",))
+    # From the real-time file (not yet quality controlled): served, not cached.
+    get, asked = _counting({"realtime2": STDMET})
+    ndbc.fetch_ndbc(*window, cache_dir=str(tmp_path), get=get, position=(0, 0))
+    assert not list((tmp_path / "ndbc").glob("*.json"))
+    # From the yearly file: cached, and served from the cache next time.
+    get, asked = _counting({"historical/stdmet": STDMET})
+    ndbc.fetch_ndbc(*window, cache_dir=str(tmp_path), get=get, position=(0, 0))
+    assert len(list((tmp_path / "ndbc").glob("*.json"))) == 1
+    get, asked = _counting({})
+    out = ndbc.fetch_ndbc(*window, cache_dir=str(tmp_path), get=get, position=(0, 0))
+    assert asked == [] and out["products"]["stdmet"]["WTMP"] == [6.0, 6.1]

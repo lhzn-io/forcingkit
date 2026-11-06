@@ -149,13 +149,19 @@ These serve validation rather than forcing:
   fallback to MSL where a station has no NAVD88 datum. Requests go through
   `insitukit <https://github.com/lhzn-io/insitukit>`__, which keeps them at least 1 s apart,
   splits windows longer than the API's 31-day limit, and retries server errors and throttling;
-  ``end_time`` is inclusive, as in the API. Current predictions (``/api/v1/currents``) and the
+  ``end_time`` is inclusive, as in the API. Each reading carries CO-OPS's quality level (``q``:
+  ``p`` preliminary, ``v`` verified) and ``metadata.quality`` sums up the window. Since 0.17.0 a
+  verified window is cached for good and one still holding preliminary readings for a day, because
+  CO-OPS replaces preliminary readings once it has reviewed them. Current predictions
+  (``/api/v1/currents``) and the
   current-station list (``/api/v1/currents/stations``) use the same client.
 - **NDBC** buoy meteorology and ADCP profiles (``/api/v1/ndbc``), from the `NOAA National Data
   Buoy Center <https://www.ndbc.noaa.gov/>`__, through insitukit's NDBC client: each month from
   the monthly, yearly or real-time file, each file downloaded once, and each column's own
   missing-value sentinel read as missing (since 0.16.0; earlier releases also dropped real
-  readings equal to another column's sentinel, such as a 999 hPa low or a 99-degree wind).
+  readings equal to another column's sentinel, such as a 999 hPa low or a 99-degree wind). A
+  window is cached only when none of it came from the real-time files, whose readings have not
+  yet been through NDBC's quality control (since 0.17.0).
 - **UConn ERDDAP** water-column profiles (``/api/v1/telemetry/station`` and ``/bbox``), from the
   `University of Connecticut Department of Marine Sciences <https://marinesciences.uconn.edu/>`__
   `ERDDAP server <http://merlin.dms.uconn.edu:8080/erddap/index.html>`__.

@@ -20,6 +20,9 @@ logger = logging.getLogger(__name__)
 
 # Water-level datums to request, in order of preference.
 TIDE_DATUMS = ("NAVD", "MSL")
+# How long a cached water-level window that still holds preliminary readings is served before
+# CO-OPS is asked again (a verified window is kept for good).
+PRELIMINARY_TTL_S = 24 * 3600
 
 
 def _utc(stamp: str) -> datetime:
@@ -56,9 +59,17 @@ def fetch_noaa_tide_data(
     in metres, on NAVD88 where the station has it and MSL otherwise. Supports caching to avoid
     redundant API calls.
 
-    Returns the shape of a CO-OPS response: ``{"metadata": {"id", "name", "lat", "lon", "datum"},
-    "data": [{"t": "YYYY-MM-DD HH:MM", "v": "0.123"}, ...]}``, with ``lat``, ``lon`` and ``v`` as
-    strings (``v`` empty for a missing reading). Raises RuntimeError when the window has no data.
+    Returns the shape of a CO-OPS response: ``{"metadata": {"id", "name", "lat", "lon", "datum",
+    "quality"}, "data": [{"t": "YYYY-MM-DD HH:MM", "v": "0.123", "q": "v"}, ...]}``, with ``lat``,
+    ``lon`` and ``v`` as strings (``v`` empty for a missing reading). ``q`` is CO-OPS's quality
+    level for the reading, ``p`` (preliminary) or ``v`` (verified); ``metadata.quality`` is
+    ``verified`` when every reading is, else ``preliminary``. Raises RuntimeError when the window
+    has no data.
+
+    A verified window is cached for good. CO-OPS replaces preliminary readings once it has
+    reviewed them, usually within a few months, so a window holding any is served from the cache
+    for ``PRELIMINARY_TTL_S`` (a day) and then fetched again, until it is verified. A cached file
+    without ``metadata.quality`` (written before 0.17.0) is fetched again.
 
     Args:
         station_id: NOAA station ID (e.g., '8516945' for Kings Point)
@@ -73,9 +84,18 @@ def fetch_noaa_tide_data(
     cache_path = os.path.join(cache_dir, f"{cache_key}.json")
 
     if not cache_bust and os.path.exists(cache_path):
-        logger.info(f"Cache hit for NOAA station {station_id}: {cache_path}")
         with open(cache_path, "r") as f:
-            return json.load(f)
+            cached = json.load(f)
+        quality = (cached.get("metadata") or {}).get("quality")
+        age_s = datetime.now().timestamp() - os.path.getmtime(cache_path)
+        if quality == "verified" or (
+            quality == "preliminary" and age_s < PRELIMINARY_TTL_S
+        ):
+            logger.info(f"Cache hit for NOAA station {station_id}: {cache_path}")
+            return cached
+        logger.info(
+            f"Cached NOAA window stale or unverified; fetching again: {cache_path}"
+        )
 
     logger.info(
         f"Fetching NOAA tide data for station {station_id} ({start_time} to {end_time})..."
@@ -87,7 +107,9 @@ def fetch_noaa_tide_data(
         # 8465705, publishes only tidal datums). The datum used is recorded in the metadata.
         for datum in TIDE_DATUMS:
             try:
-                df = coops.fetch("water_level", station_id, start, end, datum=datum)
+                df = coops.fetch(
+                    "water_level", station_id, start, end, datum=datum, quality=True
+                )
                 break
             except coops.DatumUnavailable:
                 if datum == TIDE_DATUMS[-1]:
@@ -101,6 +123,7 @@ def fetch_noaa_tide_data(
                 f"({start_time} to {end_time})"
             )
         info = coops.metadata(station_id, expand="")
+        verified = bool((df["quality"] == "v").all())
         data = {
             "metadata": {
                 "id": station_id,
@@ -108,15 +131,20 @@ def fetch_noaa_tide_data(
                 "lat": str(info["lat"]),
                 "lon": str(info["lng"]),
                 "datum": datum,
+                "quality": "verified" if verified else "preliminary",
             },
             "data": [
                 # Written as CO-OPS writes it: 3 decimals at most, no trailing zeros.
-                {"t": _t(t), "v": "" if pd.isna(v) else str(round(float(v), 3))}
-                for t, v in zip(df["time"], df["water_level"])
+                {
+                    "t": _t(t),
+                    "v": "" if pd.isna(v) else str(round(float(v), 3)),
+                    "q": q or "",
+                }
+                for t, v, q in zip(df["time"], df["water_level"], df["quality"])
             ],
         }
 
-        # Cache the successful response
+        # Kept for good when verified; a preliminary window expires (see PRELIMINARY_TTL_S).
         with open(cache_path, "w") as f:
             json.dump(data, f, indent=4)
 
