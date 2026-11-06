@@ -152,7 +152,10 @@ These serve validation rather than forcing:
   ``end_time`` is inclusive, as in the API. Current predictions (``/api/v1/currents``) and the
   current-station list (``/api/v1/currents/stations``) use the same client.
 - **NDBC** buoy meteorology and ADCP profiles (``/api/v1/ndbc``), from the `NOAA National Data
-  Buoy Center <https://www.ndbc.noaa.gov/>`__.
+  Buoy Center <https://www.ndbc.noaa.gov/>`__, through insitukit's NDBC client: each month from
+  the monthly, yearly or real-time file, each file downloaded once, and each column's own
+  missing-value sentinel read as missing (since 0.16.0; earlier releases also dropped real
+  readings equal to another column's sentinel, such as a 999 hPa low or a 99-degree wind).
 - **UConn ERDDAP** water-column profiles (``/api/v1/telemetry/station`` and ``/bbox``), from the
   `University of Connecticut Department of Marine Sciences <https://marinesciences.uconn.edu/>`__
   `ERDDAP server <http://merlin.dms.uconn.edu:8080/erddap/index.html>`__.

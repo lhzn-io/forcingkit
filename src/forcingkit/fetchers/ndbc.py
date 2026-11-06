@@ -1,46 +1,24 @@
 """NDBC buoy observations for model validation: standard meteorology (sea and air temperature,
-pressure, wind, waves) and near-surface ADCP currents.
+pressure, wind, waves) and near-surface ADCP currents, through insitukit.
 
-Files come from the NDBC data server in the order they are published: the per-month file for
-months of the current year (`data/<product>/<Mon>/<id><m><yyyy>.txt.gz`), then the yearly
-historical file (`data/historical/<product>/<id>h<yyyy>.txt.gz`), then the rolling 45-day
-real-time file (`data/realtime2/<id>.txt` or `.adcp`). Missing-value sentinels (99, 999, 9999,
-MM) become NaN. These observations validate a model; they never force it.
+insitukit's NDBC client reads each month from the first file NDBC publishes it in: the per-month
+file for months of the current year, then the yearly historical file, then the rolling 45-day
+real-time file. It downloads each file once per call, paces and identifies its requests, and turns
+NDBC's missing-value sentinels (99, 999, 9999, MM) into NaN. This module keeps forcingkit's
+function names and the JSON shape of ``fetch_ndbc``. These observations validate a model; they
+never force it.
 """
 
-import gzip
 import json
-import logging
 import math
 import os
-import re
 from typing import Optional
 
 import numpy as np
 import pandas as pd
-import requests
+from insitukit import ndbc as _ndbc
 
-logger = logging.getLogger(__name__)
-
-NDBC = "https://www.ndbc.noaa.gov"
-PRODUCTS = ("stdmet", "adcp")
-REALTIME_SUFFIX = {"stdmet": "txt", "adcp": "adcp"}
-MONTH_ABBR = [
-    "Jan",
-    "Feb",
-    "Mar",
-    "Apr",
-    "May",
-    "Jun",
-    "Jul",
-    "Aug",
-    "Sep",
-    "Oct",
-    "Nov",
-    "Dec",
-]
-# Column sentinels NDBC uses for "not measured".
-SENTINELS = {99.0, 999.0, 9999.0, 99.00}
+PRODUCTS = _ndbc.PRODUCTS
 # stdmet columns carried through, with units.
 STDMET_COLUMNS = {
     "WTMP": "degC",  # sea surface temperature
@@ -53,58 +31,19 @@ STDMET_COLUMNS = {
     "DPD": "s",
 }
 
-
-def month_code(month: int) -> str:
-    """NDBC's month code in per-month file names: 1 to 9, then a, b, c for October to December."""
-    return str(month) if month < 10 else "abc"[month - 10]
+month_code = _ndbc.month_code
 
 
 def candidate_urls(station: str, product: str, year: int, month: int) -> list[str]:
     """URLs that may hold `product` for `station` in the given month, in the order to try."""
-    station = station.lower()
-    return [
-        f"{NDBC}/data/{product}/{MONTH_ABBR[month - 1]}/{station}{month_code(month)}{year}.txt.gz",
-        f"{NDBC}/data/historical/{product}/{station}h{year}.txt.gz",
-        f"{NDBC}/data/realtime2/{station.upper()}.{REALTIME_SUFFIX[product]}",
-    ]
+    return _ndbc.urls(station, product, year, month)
 
 
 def parse_ndbc_text(text: str) -> pd.DataFrame:
-    """Parse an NDBC whitespace-delimited file (two `#` header rows) into a frame indexed by UTC
-    time, sentinels and `MM` as NaN. Handles both four- and two-digit years, with or without a
-    minute column."""
-    lines = [ln for ln in text.splitlines() if ln.strip()]
-    if not lines or not lines[0].startswith("#"):
-        raise ValueError("not an NDBC data file: no header row")
-    names = lines[0].lstrip("#").split()
-    rows = [ln.split() for ln in lines if not ln.startswith("#")]
-    df = pd.DataFrame(rows, columns=names[: len(rows[0])] if rows else names)
-    year_col = names[0]
-    years = df[year_col].astype(int)
-    years = years.where(years >= 100, years + 1900)
-    minutes = df["mm"].astype(int) if "mm" in df else 0
-    df.index = pd.to_datetime(
-        dict(
-            year=years,
-            month=df["MM"].astype(int),
-            day=df["DD"].astype(int),
-            hour=df["hh"].astype(int),
-            minute=minutes,
-        )
-    )
-    df = df.drop(columns=[c for c in (year_col, "MM", "DD", "hh", "mm") if c in df])
-    df = df.replace("MM", np.nan).apply(pd.to_numeric, errors="coerce")
-    return df.mask(df.isin(SENTINELS))
-
-
-def _get(url: str, timeout: float = 60.0) -> Optional[str]:
-    r = requests.get(url, timeout=timeout)
-    if r.status_code == 404:
-        return None
-    r.raise_for_status()
-    if url.endswith(".gz"):
-        return gzip.decompress(r.content).decode("utf-8", errors="replace")
-    return r.text
+    """Parse an NDBC whitespace-delimited file into a frame indexed by UTC time (naive),
+    sentinels and `MM` as NaN."""
+    df = _ndbc.parse(text)
+    return df.set_index(pd.DatetimeIndex(df.pop("time")).tz_localize(None))
 
 
 def _utc_naive(t) -> pd.Timestamp:
@@ -112,40 +51,24 @@ def _utc_naive(t) -> pd.Timestamp:
     return t if t.tzinfo is None else t.tz_convert("UTC").tz_localize(None)
 
 
-def station_position(station: str, get=_get) -> tuple[float, float]:
+def station_position(station: str, get=None) -> tuple[float, float]:
     """(lat, lon) of an NDBC station from its station page."""
-    html = get(f"{NDBC}/station_page.php?station={station.lower()}") or ""
-    m = re.search(r"(\d+\.\d+)\s*([NS])\s+(\d+\.\d+)\s*([EW])", html)
-    if not m:
-        raise ValueError(f"No position found for NDBC station {station}")
-    lat = float(m.group(1)) * (1 if m.group(2) == "N" else -1)
-    lon = float(m.group(3)) * (1 if m.group(4) == "E" else -1)
-    return lat, lon
+    return _ndbc.position(station, get=get)
 
 
 def fetch_product(
-    station: str, product: str, start: pd.Timestamp, end: pd.Timestamp, get=_get
+    station: str, product: str, start: pd.Timestamp, end: pd.Timestamp, get=None
 ):
-    """`product` for `station` over [start, end]: (frame, source URLs). Each month is taken from
-    the first source that has it."""
-    frames, sources = [], []
-    for month_start in pd.date_range(start.normalize().replace(day=1), end, freq="MS"):
-        for url in candidate_urls(
-            station, product, month_start.year, month_start.month
-        ):
-            text = get(url)
-            if text is None:
-                continue
-            df = parse_ndbc_text(text)
-            df = df[(df.index >= start) & (df.index <= end)]
-            if len(df):
-                frames.append(df)
-                sources.append(url)
-                break
-    if not frames:
+    """`product` for `station` over [start, end] (naive UTC, both included): (frame indexed by
+    naive UTC time, source URLs). Each month is taken from the first source that has it."""
+    t0 = _utc_naive(start).tz_localize("UTC")
+    t1 = _utc_naive(end).tz_localize("UTC") + pd.Timedelta(minutes=1)
+    df = _ndbc.fetch(station, t0, t1, product, get=get)
+    sources = list(df.attrs.get("sources", []))
+    if df.empty:
         return pd.DataFrame(), sources
-    df = pd.concat(frames)
-    return df[~df.index.duplicated(keep="first")].sort_index(), sources
+    df = df.set_index(pd.DatetimeIndex(df.pop("time")).tz_localize(None))
+    return df[df.index <= _utc_naive(end)], sources
 
 
 def _list(values) -> list:
@@ -161,7 +84,7 @@ def fetch_ndbc(
     end_time: str,
     products: tuple[str, ...] = PRODUCTS,
     cache_dir: Optional[str] = None,
-    get=_get,
+    get=None,
     position: Optional[tuple[float, float]] = None,
 ) -> dict:
     """Observations at an NDBC station over [start_time, end_time] (UTC) as a JSON-ready dict.

@@ -1062,7 +1062,7 @@ requires-dist = [
     { name = "h5netcdf", specifier = ">=1.8.1" },
     { name = "h5py", specifier = ">=3.16.0" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "insitukit", specifier = ">=0.3,<0.4" },
+    { name = "insitukit", specifier = ">=0.4,<0.5" },
     { name = "jinja2", specifier = ">=3.0.0" },
     { name = "matplotlib", specifier = ">=3.10.9" },
     { name = "pandas", specifier = ">=2.2" },
@@ -1612,16 +1612,16 @@ wheels = [
 
 [[package]]
 name = "insitukit"
-version = "0.3.0"
+version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
     { name = "pandas" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d6/2f/64ab83ca7705afcab426cfe64953dec222e6fc148bd47bf19118d9df9d70/insitukit-0.3.0.tar.gz", hash = "sha256:fa1ed9c1cf89995b6edf4a550f8835e327f352b0df69a756b3185f5dc7b67aa6", size = 99038, upload-time = "2026-11-06T00:48:46.489Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/52/1c/347ad724e468073a23c7c6c8ebac61f847fcdfd56515b02edf5c8007a624/insitukit-0.4.0.tar.gz", hash = "sha256:cf98f653dd0235a2b7d9b015185a43e5974839eb037ad30d4855acd95166a8ec", size = 104916, upload-time = "2026-11-06T12:24:57.858Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8a/00/5b0fa89c8a08b99d36533c4849e20f6061a65901693de02806ff3a22f936/insitukit-0.3.0-py3-none-any.whl", hash = "sha256:396df69830c4d921a40c7693c0f24a7e02a86617730acf010cdc4fdf2a6abb35", size = 22860, upload-time = "2026-11-06T00:48:45.069Z" },
+    { url = "https://files.pythonhosted.org/packages/28/55/9e8392e4ead1704ee9b279b7cdfe2b610554990172cad717f37a0d8a415a/insitukit-0.4.0-py3-none-any.whl", hash = "sha256:b1222ca7b90d335139b8d96445cd3c600e9678aef6a564e122f28b3986b9c4e3", size = 27409, upload-time = "2026-11-06T12:24:56.3Z" },
 ]
 
 [[package]]
