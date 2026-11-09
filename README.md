@@ -34,6 +34,7 @@ The primary goal of forcingkit is to provide clean, standardized ocean and atmos
 
 - **Oceanic Forcing**: NYOFS, NECOFS, DBOFS, HYCOM (global, 1994 to present).
 - **Atmospheric Forcing**: HRRR (3 km, hourly, 2014-07-30 to present), regridded to 0.03 degrees.
+- **Forecasts at Points**: HRRR (to 48 h) and ECCC's HRDPS (2.5 km, 10 m wind and gust to 48 h, from the MSC Datamart's 30-day window). HRDPS data: Data Source: Environment and Climate Change Canada ([license](https://eccc-msc.github.io/open-data/licence/readme_en/)).
 - **Surface Waves**: NWPS (one forecast office's grid per request, for example OKX CG1 at about 1.8 km, hourly, not regridded). NOMADS keeps about five days; older windows need an NWPS archive (`FORCINGKIT_NWPS_ARCHIVE`).
 
 ## Roadmap

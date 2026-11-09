@@ -23,6 +23,13 @@ Providers
        Dissemination <https://www.noaa.gov/information-technology/open-data-dissemination>`__
      - Dowell et al. (2022); James et al. (2022). NOAA asks for attribution and that modified
        products not be presented as NOAA's.
+   * - HRDPS
+     - `Environment and Climate Change Canada <https://www.canada.ca/en/environment-climate-change.html>`__,
+       Meteorological Service of Canada (`MSC open data
+       <https://eccc-msc.github.io/open-data/msc-data/nwp_hrdps/readme_hrdps_en/>`__)
+     - "Data Source: Environment and Climate Change Canada", with a link to the `Data Server
+       End-use Licence <https://eccc-msc.github.io/open-data/licence/readme_en/>`__ where possible.
+       The license grants no right to suggest official status or endorsement.
    * - NECOFS
      - `UMass Dartmouth SMAST <https://www.umassd.edu/smast/>`__ and `Woods Hole Oceanographic
        Institution <https://www.whoi.edu/>`__; operation supported by `NERACOOS

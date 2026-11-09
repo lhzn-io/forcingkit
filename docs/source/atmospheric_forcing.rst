@@ -47,6 +47,13 @@ Summary
      - Operational from 2026-10-06 (12 UTC cycle)
      - Hourly cycles to 18 h; to 84 h every 6 h
      - Not integrated; replaces NAM, SREF, HREF and HiresW, while HRRR stays in operations
+   * - **HRDPS** (`ECCC MSC <https://eccc-msc.github.io/open-data/msc-data/nwp_hrdps/readme_hrdps_en/>`__)
+     - Forecast, GEM limited-area, 2.5 km
+     - 0.0225 degrees (about 2.5 km), rotated latitude-longitude over Canada and the northern US
+     - 1 h
+     - Runs on the MSC Datamart for the last 30 days; no longer public archive found
+     - 00, 06, 12 and 18 UTC runs to 48 h, complete about 3 h after the run
+     - **forcingkit** ``fetchers.hrdps.fetch_points`` (points only)
    * - **NAM CONUS Nest** (NOAA NCEP)
      - Forecast, 3 km
      - 3 km, CONUS
@@ -167,6 +174,50 @@ points took 28 s on a warm connection, so one cycle's leads 1 to 18 take about t
    from forcingkit.fetchers.hrrr_points import fetch_points
 
    df = fetch_points(["2026-10-14T08:00"], [1, 6, 18], {"buoy": (-73.58, 40.96)})
+
+HRDPS forecasts at points
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``forcingkit.fetchers.hrdps.fetch_points(cycles, leads, points, fields)`` returns forecasts from
+Environment and Climate Change Canada's `High Resolution Deterministic Prediction System
+<https://eccc-msc.github.io/open-data/msc-data/nwp_hrdps/readme_hrdps_en/>`__ (HRDPS) in the same
+bitemporal rows as HRRR at points: 10 m wind rotated to east and north (``u10``, ``v10``) and the
+instantaneous 10 m gust (``gust``), in m/s. HRDPS is a second, independent short-range model at a
+similar resolution (2.5 km), run by a different centre with different physics and data
+assimilation, so its errors at a station can be measured alongside HRRR's.
+
+*Source.* The `MSC Datamart <https://eccc-msc.github.io/open-data/msc-datamart/readme_en/>`__
+(``https://dd.weather.gc.ca``) publishes each 00, 06, 12 and 18 UTC run to 48 h as one GRIB2 file
+per variable and lead (about 2 MB each, with no byte-range index), so a run's three fields at all
+49 leads are about 300 MB. The Datamart keeps 30 days; no longer public archive of the GRIB2 files
+was found, so a record of HRDPS errors has to be accumulated from the day collection starts.
+``newest_cycle()`` returns the newest run whose 48 h files are all posted (about 3 h after the run).
+``base_url=hrdps.HPFX_URL`` reads the same files from MSC's HPFX server, which has more bandwidth
+but no 24/7 support.
+
+*Grid and winds.* A rotated latitude-longitude grid of 2540 x 1290 cells at 0.0225 degrees; Long
+Island Sound is about 350 cells inside its southern edge. Winds are relative to the rotated grid and
+are rotated to east and north by the angle between each cell's grid axis and east (about 32 degrees
+near Long Island Sound). For the 2026-11-09 12 UTC run, lead 1, the rotated winds' direction
+differed from MSC's own 10 m wind direction field by a median of 0.07 degrees (99th percentile 0.44
+degrees) over every cell with wind above 2 m/s. Points take the same inverse-distance-squared mean of
+up to four water cells within 6 km as HRRR, using HRDPS's land-sea mask.
+
+A full run at one point (49 leads, three fields) took 40 s. Times that are not runs and leads past
+48 h are skipped, as is a lead with any field not yet posted.
+
+.. code-block:: python
+
+   from forcingkit.fetchers import hrdps
+
+   run = hrdps.newest_cycle()
+   df = hrdps.fetch_points([run], range(49), {"buoy": (-73.73, 40.88)})
+
+*License.* ECCC's `Data Server End-use Licence
+<https://eccc-msc.github.io/open-data/licence/readme_en/>`__ allows use and redistribution,
+including commercial use, with the attribution "Data Source: Environment and Climate Change
+Canada" and, where possible, a link to the license. It does not allow any suggestion of official
+status or endorsement.
 
 ERA5 (fallback)
 ~~~~~~~~~~~~~~~

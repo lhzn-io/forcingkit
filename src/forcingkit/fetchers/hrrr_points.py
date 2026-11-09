@@ -77,6 +77,7 @@ class PointWeights:
         points: dict[str, tuple[float, float]],
         k: int = 4,
         max_km: float = 6.0,
+        label: str = "HRRR",
     ):
         lon = ((np.asarray(lon, dtype=float) + 180.0) % 360.0) - 180.0
         lat = np.asarray(lat, dtype=float)
@@ -95,7 +96,7 @@ class PointWeights:
             near = near[d[near] <= max_km]
             if not len(near):
                 logger.warning(
-                    "HRRR points: no water cell within %.0f km of %s", max_km, name
+                    "%s points: no water cell within %.0f km of %s", label, max_km, name
                 )
                 self.cells.append(np.array([], dtype=int))
                 self.weights.append(np.array([]))
