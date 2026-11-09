@@ -203,8 +203,9 @@ differed from MSC's own 10 m wind direction field by a median of 0.07 degrees (9
 degrees) over every cell with wind above 2 m/s. Points take the same inverse-distance-squared mean of
 up to four water cells within 6 km as HRRR, using HRDPS's land-sea mask.
 
-A full run at one point (49 leads, three fields) took 40 s. Times that are not runs and leads past
-48 h are skipped, as is a lead with any field not yet posted.
+A full run (49 leads, three fields) took about 50 s at 40 points, with a peak of 490 MB: each lead
+keeps only the cells its points use, and at most two leads are read at once. Times that are not runs
+and leads past 48 h are skipped, as is a lead with any field not yet posted.
 
 .. code-block:: python
 

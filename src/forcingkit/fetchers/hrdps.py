@@ -32,9 +32,9 @@ over 2 m/s: the median difference was 0.07 degrees and the 99th percentile 0.44 
 The value at each point is an inverse-distance-squared mean of up to four HRDPS water cells (land fraction under
 0.5) within ``max_km``, as for HRRR in `hrrr_points`. Values stay in the units HRDPS publishes (m/s).
 
-License. ECCC's Data Server End-use Licence (https://eccc-msc.github.io/open-data/licence/readme_en/) allows use,
+Licence. ECCC's Data Server End-use Licence (https://eccc-msc.github.io/open-data/licence/readme_en/) allows use,
 including commercial use and redistribution, with attribution: "Data Source: Environment and Climate Change
-Canada", with a link to the license where possible. It grants no right to suggest official status or endorsement.
+Canada", with a link to the licence where possible. It grants no right to suggest official status or endorsement.
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://dd.weather.gc.ca"
 HPFX_URL = "https://hpfx.collab.science.gc.ca"
 ATTRIBUTION = "Data Source: Environment and Climate Change Canada"
-LICENSE_URL = "https://eccc-msc.github.io/open-data/licence/readme_en/"
+LICENCE_URL = "https://eccc-msc.github.io/open-data/licence/readme_en/"
 
 CYCLE_HOURS = (0, 6, 12, 18)
 MAX_LEAD = 48
@@ -192,18 +192,6 @@ def _pole(attrs) -> tuple[float, float]:
     )
 
 
-_angle_cache: dict = {}
-
-
-def _grid_angle(da) -> np.ndarray:
-    sp = _pole(da.attrs)
-    lon, lat = da["longitude"].values, da["latitude"].values
-    key = (lon.shape, sp, float(lon.flat[0]), float(lat.flat[0]))
-    if key not in _angle_cache:
-        _angle_cache[key] = grid_east_angle(lon, lat, *sp)
-    return _angle_cache[key]
-
-
 RETRIES = 4
 
 
@@ -241,24 +229,12 @@ def _read_url(client, url: str, path: str):
         os.remove(path)
 
 
-def _fetch_lead(cycle, lead, fields, workdir, client, base_url):
-    """The requested fields of one run and lead, on the HRDPS grid; None if any is not published."""
-    out = {}
-    for name in fields:
-        path = os.path.join(workdir, f"{name}_{cycle:%Y%m%d%H}_f{lead:03d}.grib2")
-        da = _read_url(client, field_url(cycle, lead, name, base_url), path)
-        if da is None:
-            logger.info("HRDPS %s f%03d: %s not published", cycle, lead, name)
-            return None
-        out[name] = da
-    return out
-
-
 _land_cache: dict = {}
 
 
 def _fetch_land(cycle, workdir, client, base_url):
-    """The land-sea mask from a run's lead 0, kept for the session (it does not change between runs)."""
+    """The land-sea mask from a run's lead 0, with the grid's coordinates; kept for the session (it does not change
+    between runs)."""
     if "land" not in _land_cache:
         path = os.path.join(workdir, f"land_{cycle:%Y%m%d%H}.grib2")
         da = _read_url(client, file_url(cycle, 0, *LAND, base_url=base_url), path)
@@ -270,27 +246,76 @@ def _fetch_land(cycle, workdir, client, base_url):
     return _land_cache["land"]
 
 
-_weights_cache: dict = {}
+class _Cells:
+    """The water cells the points draw on: their flat indices, each point's cells and weights as positions in that
+    list, and the angle of the grid's x axis at each cell (to rotate winds there only)."""
 
-
-def _weights(native, land, points, k, max_km) -> PointWeights:
-    da = next(iter(native.values()))
-    if da.shape != land.shape:
-        raise ValueError(
-            f"HRDPS: field grid {da.shape} differs from land mask grid {land.shape}"
-        )
-    key = (da.shape, tuple(sorted(points.items())), k, max_km)
-    if key not in _weights_cache:
-        _weights_cache[key] = PointWeights(
-            da["longitude"].values,
-            da["latitude"].values,
+    def __init__(self, land, points, k, max_km):
+        w = PointWeights(
+            land["longitude"].values,
+            land["latitude"].values,
             land.values,
             points,
             k,
             max_km,
             label="HRDPS",
         )
-    return _weights_cache[key]
+        self.shape = land.shape
+        self.idx = np.unique(
+            np.concatenate([c for c in w.cells if len(c)] or [np.array([], dtype=int)])
+        )
+        pos = {int(c): n for n, c in enumerate(self.idx)}
+        self.points = {
+            name: (np.array([pos[int(c)] for c in cells], dtype=int), weights)
+            for name, cells, weights in zip(w.names, w.cells, w.weights)
+        }
+        lon = land["longitude"].values.ravel()[self.idx]
+        lat = land["latitude"].values.ravel()[self.idx]
+        self.angle = grid_east_angle(lon, lat, *_pole(land.attrs))
+
+    def at_points(self, values: np.ndarray) -> dict[str, float]:
+        """Each point's weighted mean of `values` (one per cell in `idx`)."""
+        return {
+            name: float(np.dot(values[c], w)) if len(c) else float("nan")
+            for name, (c, w) in self.points.items()
+        }
+
+
+_cells_cache: dict = {}
+
+
+def _cells(land, points, k, max_km) -> _Cells:
+    key = (land.shape, tuple(sorted(points.items())), k, max_km)
+    if key not in _cells_cache:
+        _cells_cache[key] = _Cells(land, points, k, max_km)
+    return _cells_cache[key]
+
+
+def _fetch_lead(cycle, lead, fields, workdir, client, base_url, cells: _Cells):
+    """The requested fields of one run and lead at `cells` only (each decoded field, about 65 MB with its
+    coordinates, is dropped once read), with winds rotated to east and north there; None if any field is not
+    published."""
+    out = {}
+    grid_relative = False
+    for name in fields:
+        path = os.path.join(workdir, f"{name}_{cycle:%Y%m%d%H}_f{lead:03d}.grib2")
+        da = _read_url(client, field_url(cycle, lead, name, base_url), path)
+        if da is None:
+            logger.info("HRDPS %s f%03d: %s not published", cycle, lead, name)
+            return None
+        if da.shape != cells.shape:
+            raise ValueError(
+                f"HRDPS: field grid {da.shape} differs from land mask grid {cells.shape}"
+            )
+        if name == "u10":
+            grid_relative = int(da.attrs.get("GRIB_uvRelativeToGrid", 1)) == 1
+        out[name] = np.asarray(da.values, dtype=float).ravel()[cells.idx]
+        del da
+    if grid_relative and "u10" in out and "v10" in out:
+        out["u10"], out["v10"] = earth_relative_winds(
+            out["u10"], out["v10"], cells.angle
+        )
+    return out
 
 
 def fetch_points(
@@ -305,13 +330,13 @@ def fetch_points(
 ) -> pd.DataFrame:
     """HRDPS forecasts at `points` ({name: (lon, lat)}) for every run and lead, as rows of
     (issue_time, valid_time, lead_h, point, field, value). Times that are not HRDPS runs, and leads outside 0 to 48,
-    are skipped; so is a lead with any field not (yet) published."""
+    are skipped; so is a lead with any field not (yet) published. At most `max_workers` leads are read at once, and
+    each keeps only the cells its points use, so memory stays near one decoded field per worker."""
     fields = tuple(fields)
     unknown = set(fields) - set(FIELDS)
     if unknown:
         raise ValueError(f"unknown HRDPS point fields: {sorted(unknown)}")
-    wind = "u10" in fields and "v10" in fields
-    if ("u10" in fields or "v10" in fields) and not wind:
+    if ("u10" in fields) != ("v10" in fields):
         raise ValueError(
             "HRDPS u10 and v10 are grid-relative: request both to rotate them to east and north"
         )
@@ -322,36 +347,36 @@ def fetch_points(
             logger.warning("HRDPS: %s is not a 00/06/12/18 UTC run; skipped", cycle)
             continue
         tasks += [(cycle, int(lead)) for lead in leads if 0 <= int(lead) <= MAX_LEAD]
-    rows = []
+    rows: list[tuple] = []
+    if not tasks:
+        return pd.DataFrame(
+            rows,
+            columns=["issue_time", "valid_time", "lead_h", "point", "field", "value"],
+        )
     with (
         tempfile.TemporaryDirectory() as workdir,
         httpx.Client(timeout=120.0, follow_redirects=True) as client,
         concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex,
     ):
-        results = ex.map(
-            lambda t: _fetch_lead(t[0], t[1], fields, workdir, client, base_url), tasks
+        cells = _cells(
+            _fetch_land(tasks[0][0], workdir, client, base_url), points, k, max_km
         )
-        for (cycle, lead), native in zip(tasks, results):
-            if native is None:
-                continue
-            land = _fetch_land(cycle, workdir, client, base_url)
-            w = _weights(native, land, points, k, max_km)
-            if wind and int(native["u10"].attrs.get("GRIB_uvRelativeToGrid", 1)) == 1:
-                ue, vn = earth_relative_winds(
-                    native["u10"].values,
-                    native["v10"].values,
-                    _grid_angle(native["u10"]),
-                )
-                values = {"u10": w(ue), "v10": w(vn)}
-            else:
-                values = {}
-            for name in fields:
-                if name not in values:
-                    values[name] = w(native[name].values)
-            valid = cycle + pd.Timedelta(hours=lead)
-            for name in fields:
-                for p, v in values[name].items():
-                    rows.append((cycle, valid, lead, p, name, v))
+        # Submitted a batch at a time, so finished leads do not pile up ahead of the loop.
+        for b in range(0, len(tasks), max_workers):
+            batch = tasks[b : b + max_workers]
+            results = ex.map(
+                lambda t: _fetch_lead(
+                    t[0], t[1], fields, workdir, client, base_url, cells
+                ),
+                batch,
+            )
+            for (cycle, lead), at_cells in zip(batch, results):
+                if at_cells is None:
+                    continue
+                valid = cycle + pd.Timedelta(hours=lead)
+                for name in fields:
+                    for p, v in cells.at_points(at_cells[name]).items():
+                        rows.append((cycle, valid, lead, p, name, v))
     return pd.DataFrame(
         rows, columns=["issue_time", "valid_time", "lead_h", "point", "field", "value"]
     )

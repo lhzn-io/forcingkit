@@ -81,32 +81,38 @@ def _grid():
     return lon, lat, land
 
 
-def _fake_lead(cycle, lead, fields, workdir, client, base_url, sp=(SP_LAT, SP_LON)):
-    lon, lat, _ = _grid()
-    return {
-        name: xr.DataArray(
-            np.full(lon.shape, float(n + 1 + lead)),
-            dims=("y", "x"),
-            coords={"longitude": (("y", "x"), lon), "latitude": (("y", "x"), lat)},
-            attrs={
-                "GRIB_latitudeOfSouthernPoleInDegrees": sp[0],
-                "GRIB_longitudeOfSouthernPoleInDegrees": sp[1],
-                "GRIB_angleOfRotationInDegrees": 0.0,
-                "GRIB_uvRelativeToGrid": 1,
-            },
-        )
-        for n, name in enumerate(fields)
-    }
+# Grid values by variable in the fake files: u = 1, v = 2, gust = 3, each plus the lead.
+FAKE_BASE = {"UGRD": 1.0, "VGRD": 2.0, "GUST": 3.0}
+ATTRS = {
+    "GRIB_latitudeOfSouthernPoleInDegrees": SP_LAT,
+    "GRIB_longitudeOfSouthernPoleInDegrees": SP_LON,
+    "GRIB_angleOfRotationInDegrees": 0.0,
+    "GRIB_uvRelativeToGrid": 1,
+}
+
+
+def _fake_read(client, url, path, unpublished=()):
+    """A stand-in for one Datamart file read: the variable and lead come from the URL."""
+    lon, lat, land = _grid()
+    name = url.rsplit("/", 1)[-1]
+    var = name.split("_MSC_HRDPS_")[1].split("_")[0]
+    lead = int(name.rsplit("_PT", 1)[1][:3])
+    if lead in unpublished:
+        return None
+    values = land if var == "LAND" else np.full(lon.shape, FAKE_BASE[var] + lead)
+    return xr.DataArray(
+        values,
+        dims=("y", "x"),
+        coords={"longitude": (("y", "x"), lon), "latitude": (("y", "x"), lat)},
+        attrs=ATTRS,
+    )
 
 
 @pytest.fixture
 def fake(monkeypatch):
-    monkeypatch.setattr(hd, "_fetch_lead", _fake_lead)
-    monkeypatch.setattr(
-        hd, "_fetch_land", lambda *a: xr.DataArray(_grid()[2], dims=("y", "x"))
-    )
-    hd._weights_cache.clear()
-    hd._angle_cache.clear()
+    monkeypatch.setattr(hd, "_read_url", _fake_read)
+    hd._land_cache.clear()
+    hd._cells_cache.clear()
 
 
 def test_rows_are_bitemporal_and_skip_what_hrdps_does_not_carry(fake):
@@ -120,19 +126,17 @@ def test_rows_are_bitemporal_and_skip_what_hrdps_does_not_carry(fake):
     assert sorted(df.lead_h.unique()) == [0, 1, 48]
     row = df[df.lead_h == 48].iloc[0]
     assert row.valid_time == pd.Timestamp("2026-11-11T12:00")
-    assert row.value == pytest.approx(1 + 48)
+    assert row.value == pytest.approx(3 + 48)
 
 
 def test_an_unpublished_lead_is_skipped(fake, monkeypatch):
     monkeypatch.setattr(
-        hd,
-        "_fetch_lead",
-        lambda c, lead, *a: None if lead == 2 else _fake_lead(c, lead, *a),
+        hd, "_read_url", lambda c, u, p: _fake_read(c, u, p, unpublished=(2,))
     )
     df = hd.fetch_points(
-        ["2026-11-09T12:00"], [1, 2], {"buoy": (-73.4, 40.8)}, fields=("gust",)
+        ["2026-11-09T12:00"], [1, 2, 3], {"buoy": (-73.4, 40.8)}, fields=("gust",)
     )
-    assert list(df.lead_h.unique()) == [1]
+    assert sorted(df.lead_h.unique()) == [1, 3]
 
 
 def test_grid_relative_winds_are_rotated_to_east_and_north(fake):
@@ -145,11 +149,26 @@ def test_grid_relative_winds_are_rotated_to_east_and_north(fake):
     a = hd.grid_east_angle(np.array([point[0]]), np.array([point[1]]), SP_LAT, SP_LON)[
         0
     ]
-    # The fake gives grid u = 1 + 1 and grid v = 2 + 1 (field order plus lead).
+    # The fake gives grid u = 1 + 1 and grid v = 2 + 1.
     assert u == pytest.approx(np.cos(a) * 2.0 - np.sin(a) * 3.0, abs=1e-5)
     assert v == pytest.approx(np.sin(a) * 2.0 + np.cos(a) * 3.0, abs=1e-5)
     # Near Long Island Sound the grid's x axis points about 32 degrees south of east.
     assert np.rad2deg(a) == pytest.approx(-32.3, abs=0.1)
+
+
+def test_a_lead_keeps_only_the_cells_its_points_use(fake):
+    land = hd._fetch_land(pd.Timestamp("2026-11-09T12:00"), "", None, hd.BASE_URL)
+    pts = {"a": (-73.4, 40.8), "b": (-73.3, 40.9)}
+    cells = hd._cells(land, pts, 4, 6.0)
+    assert 0 < len(cells.idx) <= 8
+    got = hd._fetch_lead(
+        pd.Timestamp("2026-11-09T12:00"), 5, ("gust",), "/tmp", None, hd.BASE_URL, cells
+    )
+    assert got["gust"].shape == cells.idx.shape
+    assert cells.at_points(got["gust"]) == {
+        "a": pytest.approx(8.0),
+        "b": pytest.approx(8.0),
+    }
 
 
 def test_one_wind_component_alone_and_unknown_fields_are_refused():
