@@ -159,3 +159,28 @@ def test_station_listing_keeps_harmonic_bins_in_the_box(tmp_path, monkeypatch):
         [-73.86, 40.75, -72.84, 41.35], cache_dir=str(tmp_path)
     )
     assert len(calls) == 1
+
+
+def test_cached_predictions_expire_after_thirty_days(tmp_path, monkeypatch):
+    import os
+
+    rows = [
+        {
+            "meanFloodDir": 272,
+            "Bin": "15",
+            "meanEbbDir": 79,
+            "Time": "2026-04-02 00:00",
+            "Depth": "6.7",
+            "Velocity_Major": 30.3,
+        }
+    ]
+    calls = answer(monkeypatch, {"current_predictions": {"cp": rows}})
+    args = ("LIS1027", 15, "2026-04-02T00:00:00", "2026-04-02T00:30:00")
+    noaa.fetch_noaa_current_predictions(*args, cache_dir=str(tmp_path))
+    noaa.fetch_noaa_current_predictions(*args, cache_dir=str(tmp_path))
+    assert len(calls) == 2  # one prediction request and one metadata request
+    for p in tmp_path.glob("currents_*.json"):
+        t = p.stat().st_mtime - noaa.PREDICTIONS_TTL_S - 60
+        os.utime(p, (t, t))
+    noaa.fetch_noaa_current_predictions(*args, cache_dir=str(tmp_path))
+    assert len(calls) == 4

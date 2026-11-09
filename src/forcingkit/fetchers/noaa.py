@@ -23,6 +23,9 @@ TIDE_DATUMS = ("NAVD", "MSL")
 # How long a cached water-level window that still holds preliminary readings is served before
 # CO-OPS is asked again (a verified window is kept for good).
 PRELIMINARY_TTL_S = 24 * 3600
+# How long cached current predictions are served before CO-OPS is asked again. Predictions follow
+# from a station's harmonic constants, which NOAA re-publishes now and then.
+PREDICTIONS_TTL_S = 30 * 86400
 
 
 def _utc(stamp: str) -> datetime:
@@ -221,13 +224,17 @@ def fetch_noaa_current_predictions(
     ``interval_minutes``. The metadata carries the station's position, the bin depth (metres
     below the surface), and the mean flood and ebb directions (degrees true, toward which the
     water flows). Only harmonic stations give a series; subordinate stations give slack and
-    maximum times only and are refused. ``get`` is ignored (kept for callers of earlier
-    releases; requests go through insitukit).
+    maximum times only and are refused. A cached response is served for ``PREDICTIONS_TTL_S``
+    (30 days), then fetched again, so a re-published set of harmonic constants reaches it.
+    ``get`` is ignored (kept for callers of earlier releases; requests go through insitukit).
     """
     os.makedirs(cache_dir, exist_ok=True)
     key = f"currents_{station_id}_b{bin_number}_{start_time}_{end_time}_{interval_minutes}"
     cache_path = os.path.join(cache_dir, key.replace(":", "-") + ".json")
-    if not cache_bust and os.path.exists(cache_path):
+    fresh = os.path.exists(cache_path) and (
+        datetime.now().timestamp() - os.path.getmtime(cache_path) < PREDICTIONS_TTL_S
+    )
+    if fresh and not cache_bust:
         with open(cache_path) as f:
             return json.load(f)
 

@@ -154,7 +154,8 @@ These serve validation rather than forcing:
   verified window is cached for good and one still holding preliminary readings for a day, because
   CO-OPS replaces preliminary readings once it has reviewed them. Current predictions
   (``/api/v1/currents``) and the
-  current-station list (``/api/v1/currents/stations``) use the same client.
+  current-station list (``/api/v1/currents/stations``) use the same client; cached predictions are
+  fetched again after 30 days (since 0.17.1), so harmonic constants NOAA re-publishes reach them.
 - **NDBC** buoy meteorology and ADCP profiles (``/api/v1/ndbc``), from the `NOAA National Data
   Buoy Center <https://www.ndbc.noaa.gov/>`__, through insitukit's NDBC client: each month from
   the monthly, yearly or real-time file, each file downloaded once, and each column's own
