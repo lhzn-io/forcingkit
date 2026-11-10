@@ -180,3 +180,71 @@ def test_one_wind_component_alone_and_unknown_fields_are_refused():
         hd.fetch_points(
             ["2026-11-09T12:00"], [1], {"b": (-73.4, 40.8)}, fields=("cape",)
         )
+
+
+# ---------- A caller's client, and HPFX's ----------
+
+
+def test_a_callers_client_is_used_for_every_read_and_left_open(fake, monkeypatch):
+    import httpx
+
+    seen = []
+
+    def read(client, url, path):
+        seen.append((client, url.split("/", 3)[2]))
+        return _fake_read(client, url, path)
+
+    monkeypatch.setattr(hd, "_read_url", read)
+    client = httpx.Client()
+    df = hd.fetch_points(
+        ["2026-11-09T12:00"],
+        [0, 1],
+        {"buoy": (-73.4, 40.8)},
+        fields=("gust",),
+        base_url=hd.HPFX_URL,
+        client=client,
+    )
+    assert len(df) == 2
+    assert {c for c, _ in seen} == {client} and {h for _, h in seen} == {
+        "hpfx.collab.science.gc.ca"
+    }
+    assert not client.is_closed
+    client.close()
+
+
+def test_newest_cycle_asks_through_a_callers_client():
+    import httpx
+
+    asked = []
+
+    def handler(request):
+        asked.append(request.url.host)
+        return httpx.Response(200 if "T06Z" in request.url.path else 404)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    run = hd.newest_cycle(
+        "2026-11-09T13:00", ("u10",), base_url=hd.HPFX_URL, client=client, lookback=3
+    )
+    assert run == pd.Timestamp("2026-11-09T06:00")
+    assert set(asked) == {"hpfx.collab.science.gc.ca"} and len(asked) == 2
+    assert not client.is_closed
+    client.close()
+
+
+def test_hpfx_client_caps_tls_at_1_2(monkeypatch):
+    import ssl
+
+    import httpx
+
+    made = {}
+    real = httpx.Client
+
+    def capture(**kw):
+        made.update(kw)
+        return real(**kw)
+
+    monkeypatch.setattr(hd.httpx, "Client", capture)
+    with hd.hpfx_client(timeout=30.0):
+        pass
+    assert made["verify"].maximum_version == ssl.TLSVersion.TLSv1_2
+    assert made["timeout"] == 30.0 and made["follow_redirects"]

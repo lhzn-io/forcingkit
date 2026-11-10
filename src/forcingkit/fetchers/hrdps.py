@@ -14,7 +14,9 @@ lead, with no byte-range index, under a directory for the run's date:
 ``{base}/today/model_hrdps/...`` is an alias for the current date. The Datamart keeps 30 days of dated directories
 (MSC's stated retention, which held on 2026-11-09: 2026-10-11 to 2026-11-09 were present). The HPFX server
 (``https://hpfx.collab.science.gc.ca``) mirrors the same layout and retention with no 24/7 support; pass it as
-``base_url`` if the Datamart is slow. No longer public archive of the GRIB2 files was found, so a record of HRDPS
+``base_url`` if the Datamart is slow or cannot be reached, with ``client=hpfx_client()``: on 2026-11-10 HPFX did not
+answer a TLS 1.3 handshake that offers ALPN, which httpx always does (no reply within 30 s, every attempt), while it
+answered TLS 1.3 without ALPN and TLS 1.2 with it at once, so ``hpfx_client`` caps TLS at 1.2. No longer public archive of the GRIB2 files was found, so a record of HRDPS
 scores has to be accumulated from the day collection starts. A run's 48 h files were complete about 3 h after the
 run time (the 2026-11-09 12 UTC run's PT048H files were posted at 15:08 UTC).
 
@@ -40,8 +42,10 @@ Canada", with a link to the licence where possible. It grants no right to sugges
 from __future__ import annotations
 
 import concurrent.futures
+import contextlib
 import logging
 import os
+import ssl
 import tempfile
 import time
 from typing import Callable, Iterable
@@ -100,6 +104,14 @@ def is_cycle(cycle) -> bool:
     return cycle == cycle.floor("h") and cycle.hour in CYCLE_HOURS
 
 
+def hpfx_client(timeout: float = 120.0) -> httpx.Client:
+    """An httpx client for the HPFX server: TLS 1.2 at most (see the module notes). Pass it as ``client`` with
+    ``base_url=HPFX_URL``; the caller closes it."""
+    ctx = httpx.create_ssl_context()
+    ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+    return httpx.Client(timeout=timeout, follow_redirects=True, verify=ctx)
+
+
 def _exists(client: httpx.Client, url: str) -> bool:
     r = client.head(url)
     if r.status_code == 404:
@@ -115,16 +127,18 @@ def newest_cycle(
     lookback: int = 8,
     base_url: str = BASE_URL,
     exists: Callable[[str], bool] | None = None,
+    client: httpx.Client | None = None,
 ) -> pd.Timestamp | None:
     """The newest run at or before `now` whose `lead` file is published for every field, looking back `lookback`
     runs (two days by default); None if none is. A run's last lead is posted last, so the default asks for a
-    complete run."""
+    complete run. `client`, if given, makes the requests and is left open (``hpfx_client()`` for HPFX)."""
     now = _utc_naive(pd.Timestamp.now(tz="UTC") if now is None else now)
     fields = tuple(fields)
     cycle = now.floor("6h")
-    client = None
+    own = None
     if exists is None:
-        client = httpx.Client(timeout=30.0, follow_redirects=True)
+        if client is None:
+            client = own = httpx.Client(timeout=30.0, follow_redirects=True)
         exists = lambda url: _exists(client, url)  # noqa: E731
     try:
         for _ in range(lookback):
@@ -132,8 +146,8 @@ def newest_cycle(
                 return cycle
             cycle -= pd.Timedelta(hours=6)
     finally:
-        if client is not None:
-            client.close()
+        if own is not None:
+            own.close()
     return None
 
 
@@ -327,11 +341,13 @@ def fetch_points(
     max_km: float = 6.0,
     max_workers: int = 2,
     base_url: str = BASE_URL,
+    client: httpx.Client | None = None,
 ) -> pd.DataFrame:
     """HRDPS forecasts at `points` ({name: (lon, lat)}) for every run and lead, as rows of
     (issue_time, valid_time, lead_h, point, field, value). Times that are not HRDPS runs, and leads outside 0 to 48,
     are skipped; so is a lead with any field not (yet) published. At most `max_workers` leads are read at once, and
-    each keeps only the cells its points use, so memory stays near one decoded field per worker."""
+    each keeps only the cells its points use, so memory stays near one decoded field per worker. `client`, if given,
+    makes the requests and is left open (``hpfx_client()`` for HPFX)."""
     fields = tuple(fields)
     unknown = set(fields) - set(FIELDS)
     if unknown:
@@ -353,11 +369,15 @@ def fetch_points(
             rows,
             columns=["issue_time", "valid_time", "lead_h", "point", "field", "value"],
         )
-    with (
-        tempfile.TemporaryDirectory() as workdir,
-        httpx.Client(timeout=120.0, follow_redirects=True) as client,
-        concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex,
-    ):
+    with contextlib.ExitStack() as stack:
+        if client is None:  # our own, closed on the way out; a caller's is left open
+            client = stack.enter_context(
+                httpx.Client(timeout=120.0, follow_redirects=True)
+            )
+        workdir = stack.enter_context(tempfile.TemporaryDirectory())
+        ex = stack.enter_context(
+            concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        )
         cells = _cells(
             _fetch_land(tasks[0][0], workdir, client, base_url), points, k, max_km
         )
