@@ -138,12 +138,12 @@ function initThree(container) {
     camera = new THREE.PerspectiveCamera(55, container.clientWidth / container.clientHeight, 0.1, 5000);
     camera.position.set(0, 150, 250);
 
-    // The scene is about 200 units across whatever the dataset's size, so metres per unit is set
+    // The scene is about 200 units across whatever the dataset's size, so meters per unit is set
     // per dataset (buildVectorField). The keyboard acts only while the canvas has focus, so the
     // page's own keys and scrolling keep working.
     nav = createVantage({
         THREE, CameraControls, camera, dom: canvas,
-        metresPerUnit: 1, exaggeration: DEPTH_EXAG * DEPTH_BASE_MULT,
+        metersPerUnit: 1, exaggeration: DEPTH_EXAG * DEPTH_BASE_MULT,
         keys: 'focus', minDistance: 0.5, smoothTime: 0.2,
     });
 
@@ -207,7 +207,7 @@ function buildVectorField(data, fitCamera) {
     const latSpan = Math.max(latMax - latMin, 0.001) * degToM;
     const maxSpan = Math.max(lonSpan, latSpan);
     const sceneScale = 200 / maxSpan;
-    nav.metresPerUnit = 1 / sceneScale;   // movement speeds and readouts in real metres
+    nav.metersPerUnit = 1 / sceneScale;   // movement speeds and readouts in real meters
 
     // Compute max magnitude
     let maxMag = 0;
