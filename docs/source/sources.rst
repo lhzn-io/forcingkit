@@ -71,6 +71,13 @@ Providers
      - Acknowledge NOAA NESDIS CoastWatch and the datasets named in the store's ``products``
        attribute. MUR: JPL MUR MEaSUREs Project (2015) and Chin et al. (2017). OLCI and DINEOF
        products require "Contains modified Copernicus Sentinel data [year]".
+   * - HF radar surface currents
+     - The radar sites' operators (for western Long Island Sound, the `University of Connecticut
+       <https://lisicos.uconn.edu/>`__ LISICOS program), combined by the `NOAA IOOS HF Radar
+       National Network <https://ioos.noaa.gov/project/hf-radar/>`__ (HFRNet) and served by `NOAA
+       NDBC <https://www.ndbc.noaa.gov/>`__
+     - Acknowledge the site operators and HFRNet (Terrill et al., 2006), as in each file's
+       ``source_credit`` attribute.
    * - Water-column profiles
      - `University of Connecticut Department of Marine Sciences
        <https://marinesciences.uconn.edu/>`__ (`ERDDAP
@@ -140,6 +147,8 @@ References
   split-explicit, free-surface, topography-following-coordinate oceanic model. *Ocean
   Modelling*, 9(4), 347-404.
   `doi:10.1016/j.ocemod.2004.08.002 <https://doi.org/10.1016/j.ocemod.2004.08.002>`__
+- Terrill, E., M. Otero, L. Hazard, et al. (2006). Data management and real-time distribution in
+  the HF-radar national network. *Proceedings of the MTS/IEEE OCEANS 2006 Conference*, Boston, MA.
 - Tsujino, H., S. Urakawa, H. Nakano, et al. (2018). JRA-55 based surface dataset for driving
   ocean-sea-ice models (JRA55-do). *Ocean Modelling*, 130, 79-139.
   `doi:10.1016/j.ocemod.2018.07.002 <https://doi.org/10.1016/j.ocemod.2018.07.002>`__

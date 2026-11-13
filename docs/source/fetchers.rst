@@ -177,6 +177,21 @@ These serve validation rather than forcing:
   are read at once, through `insitukit <https://github.com/lhzn-io/insitukit>`__'s ERDDAP client
   (one attempt each, starting at least 0.2 s apart).
 
+- **HF radar** surface currents (library only: ``forcingkit.fetchers.hfradar``), the hourly total
+  vectors of the `NOAA IOOS HF Radar National Network <https://ioos.noaa.gov/project/hf-radar/>`__
+  (HFRNet) for the US East and Gulf Coast at 1 km and 2 km, from NDBC's `THREDDS server
+  <https://dods.ndbc.noaa.gov/thredds/catalog/hfradar/catalog.html>`__ over OPeNDAP (since 0.19.0).
+  They represent roughly the upper 0.5 m, for scoring a model's surface layer. ``fetch`` returns a box
+  and window as stored on the server (16-bit integers with scale 0.01, so nothing is rounded twice).
+  The server keeps only about 92 days, so ``archive`` keeps a box one NetCDF-4 file per UTC day under
+  ``FORCINGKIT_CACHE_DIR/hfradar/usegc_<grid>/<box>/<YYYY>/<MM>/``, written once the server has
+  published past the day's end and six hours have passed, and never rewritten; it takes any store
+  with ``has`` and ``put`` (a create-only bucket, for example). ``load`` reads a box and window back
+  in m/s from any archived box that contains it, and the other days from the server while it holds
+  them. The ``hfradar`` directory is an archive, not a cache: do not purge it with the Zarr stores.
+  Coverage is uneven: in western Long Island Sound about 2 % of the 1 km cells in the box
+  40.85-41.3 N, 73.8-71.8 W have a solution in a covered hour, and whole weeks have none.
+
 NOAA OFS archive locations
 --------------------------
 

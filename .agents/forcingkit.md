@@ -95,4 +95,6 @@ uv run python -c "from forcingkit.fetchers import nyofs; print(nyofs.get_metadat
 - **Cache keys**: Cache Zarr keys are deterministic hashes of bbox
   - time window. Changing fetcher output schema (variable names, dims)
   will miss existing cache entries — purge
-  `~/.cache/forcingkit/` when making breaking schema changes.
+  `~/.cache/forcingkit/` when making breaking schema changes, except
+  `hfradar/`: that is the HF radar archive (`fetchers/hfradar.py`), days the
+  server no longer holds, not a cache.
