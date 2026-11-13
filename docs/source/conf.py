@@ -15,7 +15,6 @@ extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.napoleon",
     "sphinx.ext.viewcode",
-    "sphinx_rtd_theme",
     "myst_parser",
 ]
 
@@ -24,8 +23,12 @@ exclude_patterns: list[str] = []
 
 language = "en"
 
-html_theme = "sphinx_rtd_theme"
+html_theme = "lhzn"
+html_theme_options = {
+    "source_repository": "https://github.com/lhzn-io/forcingkit",
+    "source_branch": "main",
+    "source_directory": "docs/source/",
+}
 html_static_path = ["_static"]
-html_css_files = ["custom.css"]
 # CNAME for the custom domain forcingkit.docs.lhzn.io, copied to the site root.
 html_extra_path = ["_extra"]
