@@ -190,6 +190,8 @@ These serve validation rather than forcing:
   in m/s from any archived box that contains it, and the other days from the server while it holds
   them. The ``hfradar`` directory is an archive, not a cache: do not purge it with the Zarr stores.
   ``FORCINGKIT_HFRADAR_ARCHIVE`` puts it elsewhere (since 0.20.0).
+  Coverage is uneven: in western Long Island Sound about 2 % of the 1 km cells in the box
+  40.85-41.3 N, 73.8-71.8 W have a solution in a covered hour, and whole weeks have none.
 
   Older days come from `NOAA NCEI <https://www.ncei.noaa.gov/>`__, which archives the same hourly
   totals (the same variables, stored the same way, on the same grids) as one file per hour in monthly
@@ -202,8 +204,6 @@ These serve validation rather than forcing:
       python -m forcingkit.fetchers.hfradar ncei --box -73.8 40.85 -71.8 41.3 \
           --start 2025-01-01 --end 2026-09-01 [--grids 1km 2km] [--root DIR] [--workers 4]
       python -m forcingkit.fetchers.hfradar ndbc --box -73.8 40.85 -71.8 41.3 --start all [--root DIR]
-  Coverage is uneven: in western Long Island Sound about 2 % of the 1 km cells in the box
-  40.85-41.3 N, 73.8-71.8 W have a solution in a covered hour, and whole weeks have none.
 
 NOAA OFS archive locations
 --------------------------
