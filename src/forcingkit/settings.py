@@ -82,6 +82,13 @@ def nwps_archive() -> str | None:
     return env("FORCINGKIT_NWPS_ARCHIVE") or None
 
 
+def hfradar_archive() -> str | None:
+    """Where the HF radar archive lives (FORCINGKIT_HFRADAR_ARCHIVE), when it should not sit in the cache: the
+    archive keeps days the servers no longer hold, so a cache purge must never reach it. Unset or empty means
+    ``cache_dir("hfradar")``."""
+    return env("FORCINGKIT_HFRADAR_ARCHIVE") or None
+
+
 def erddap_timeouts() -> tuple[float, float]:
     """(connect, read) timeouts in seconds for ERDDAP profile reads
     (FORCINGKIT_ERDDAP_CONNECT_TIMEOUT, default 10; FORCINGKIT_ERDDAP_READ_TIMEOUT, default 60)."""

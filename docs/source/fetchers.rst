@@ -189,6 +189,19 @@ These serve validation rather than forcing:
   with ``has`` and ``put`` (a create-only bucket, for example). ``load`` reads a box and window back
   in m/s from any archived box that contains it, and the other days from the server while it holds
   them. The ``hfradar`` directory is an archive, not a cache: do not purge it with the Zarr stores.
+  ``FORCINGKIT_HFRADAR_ARCHIVE`` puts it elsewhere (since 0.20.0).
+
+  Older days come from `NOAA NCEI <https://www.ncei.noaa.gov/>`__, which archives the same hourly
+  totals (the same variables, stored the same way, on the same grids) as one file per hour in monthly
+  accessions, from about two months back to the network's start. ``archive_ncei`` finds a window's
+  accessions through NCEI's metadata search, reads each hour's file (about 0.8 MB at 1 km for the whole
+  coast), cuts the box out and writes the same daily files, so ``load`` reads days from either source
+  alike; ``source_dataset`` names the accession. Days already kept are skipped, and a day is written
+  with the hours NCEI holds (since 0.20.0). From the command line::
+
+      python -m forcingkit.fetchers.hfradar ncei --box -73.8 40.85 -71.8 41.3 \
+          --start 2025-01-01 --end 2026-09-01 [--grids 1km 2km] [--root DIR] [--workers 4]
+      python -m forcingkit.fetchers.hfradar ndbc --box -73.8 40.85 -71.8 41.3 --start all [--root DIR]
   Coverage is uneven: in western Long Island Sound about 2 % of the 1 km cells in the box
   40.85-41.3 N, 73.8-71.8 W have a solution in a covered hour, and whole weeks have none.
 

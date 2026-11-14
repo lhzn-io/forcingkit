@@ -24,17 +24,32 @@ kept, with no screening. Unlike the Zarr stores beside it, this directory is an 
 those days again once they leave its window, so do not purge it. `load` reads a box and window back, decoded to m/s,
 from any archived box that contains it, and fetches days the archive lacks from the server while it still holds them.
 
+Older days come from NOAA NCEI, which archives the same hourly totals (the same variables, stored the same way, on
+the same grids) as one file per hour in monthly accessions. `archive_ncei` finds a window's accessions through NCEI's
+metadata search, reads each hour's file, cuts the box out and writes the same daily files, so `load` reads both
+alike; their ``source_dataset`` names the accession. NCEI's accessions lag the present by a month or two; NDBC's
+window covers the rest. The archive's root is ``FORCINGKIT_HFRADAR_ARCHIVE`` when set (see `settings.hfradar_archive`).
+
+From the command line::
+
+    python -m forcingkit.fetchers.hfradar ncei --box W S E N --start 2025-01-01 --end 2026-09-01 [--root DIR]
+    python -m forcingkit.fetchers.hfradar ndbc --box W S E N [--start all] [--root DIR]
+
 Credit: the radar sites' operators (named in HFRNet's site list; for example the University of Connecticut's LISICOS
 for western Long Island Sound) and the NOAA IOOS HF Radar National Network; see ``source_credit`` in each file.
 """
 
 from __future__ import annotations
 
+import argparse
 import io
+import json
 import logging
 import os
 import re
+import time as _time
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Protocol
@@ -94,6 +109,17 @@ CREDIT = (
     "HF radar sites operated by their institutions (for western Long Island Sound, the University of Connecticut's "
     "LISICOS); hourly total vectors from the NOAA IOOS HF Radar National Network (HFRNet), served by NOAA NDBC."
 )
+NCEI_CREDIT = CREDIT.replace("served by NOAA NDBC.", "archived by NOAA NCEI.")
+NCEI = "https://www.ncei.noaa.gov"
+NCEI_SEARCH = f"{NCEI}/metadata/granule/geoportal/opensearch"
+NCEI_ARCHIVE = f"{NCEI}/data/oceans/archive/"
+# The metadata series holding the hourly totals (the Radial series beside them hold each site's radials).
+NCEI_SERIES = ("IOOS-HFRadarRTVector", "NDBC-HFRadarRTVector")
+NCEI_INDEX = "ncei_accessions.json"  # accession -> its folder, beside the archive, so each is looked up once
+_NCEI_TITLE = re.compile(r"during ([A-Z][a-z]+) (\d{4}) \(NCEI Accession (\d+)\)")
+_NCEI_FILE = re.compile(
+    r'href="(rtv-usegc-([126]km)-[^"/]*_s(\d{12})\d*_e\d+_c(\d+)\.nc)"'
+)
 NAME = re.compile(
     r"usegc_[126]km/\d{2}\.\d{3}[NS]_\d{2}\.\d{3}[NS]_\d{3}\.\d{3}[EW]_\d{3}\.\d{3}[EW]/\d{4}/\d{2}/"
     r"hfradar_usegc_[126]km_\d{8}\.nc"
@@ -118,9 +144,7 @@ class LocalStore:
     """A directory; files are created once and never replaced."""
 
     def __init__(self, root: str | os.PathLike | None = None):
-        self.root = Path(
-            root if root is not None else settings.cache_dir("hfradar")
-        ).expanduser()
+        self.root = Path(root if root is not None else archive_root()).expanduser()
 
     def has(self, name: str) -> bool:
         return (self.root / name).exists()
@@ -136,6 +160,11 @@ class LocalStore:
         tmp.write_bytes(data)
         tmp.rename(path)
         return True
+
+
+def archive_root() -> str:
+    """The archive's default root: FORCINGKIT_HFRADAR_ARCHIVE, else the cache's ``hfradar`` directory."""
+    return settings.hfradar_archive() or settings.cache_dir("hfradar")
 
 
 def dataset_url(grid: str) -> str:
@@ -257,9 +286,17 @@ def _stored(var: xr.DataArray) -> tuple[np.ndarray, dict]:
 
 
 def _normalize(
-    sub: xr.Dataset, grid: str, bbox: BBox, source_attrs: dict, fetched: datetime
+    sub: xr.Dataset,
+    grid: str,
+    bbox: BBox,
+    source_attrs: dict,
+    fetched: datetime,
+    source: str | None = None,
+    credit: str = CREDIT,
 ) -> xr.Dataset:
-    """The server's subset as a clean Dataset of stored values, with its encodings and credit."""
+    """The server's subset as a clean Dataset of stored values, with its encodings and credit. ``source`` names
+    where it came from (default: NDBC's dataset)."""
+    source = source or dataset_url(grid)
     out = xr.Dataset(
         coords={
             "time": sub["time"].values,
@@ -294,10 +331,10 @@ def _normalize(
     w, s, e, n = bbox
     attrs.update(
         {
-            "source_dataset": dataset_url(grid),
-            "source_credit": CREDIT,
+            "source_dataset": source,
+            "source_credit": credit,
             "subset": f"latitude {s} to {n}, longitude {w} to {e}; values as stored on the server",
-            "history": f"{fetched:%Y-%m-%dT%H:%M:%SZ} subset from {dataset_url(grid)} by forcingkit",
+            "history": f"{fetched:%Y-%m-%dT%H:%M:%SZ} subset from {source} by forcingkit",
         }
     )
     out.attrs = attrs
@@ -451,9 +488,7 @@ def load(
     """The box's hours in [start, end), decoded (u and v in m/s, NaN where there is no solution): archived days from
     any archived box that contains this one, and, when ``remote``, the other days from the server while it still
     holds them (not archived by this call). Empty in time when neither has any."""
-    base = Path(
-        root if root is not None else settings.cache_dir("hfradar")
-    ).expanduser()
+    base = Path(root if root is not None else archive_root()).expanduser()
     t0, t1 = _utc_naive(start), _utc_naive(end)
     boxes = _containing_boxes(base, grid, bbox)
     parts: list[xr.Dataset] = []
@@ -498,3 +533,262 @@ def load(
     out = out.sel(time=slice(t0, t1 - pd.Timedelta(seconds=1)))
     out.attrs = {"source_dataset": dataset_url(grid), "source_credit": CREDIT}
     return out
+
+
+# ---- NCEI's monthly archive ----
+
+
+def _client(session: requests.Session | None) -> requests.Session:
+    if session is None:
+        session = requests.Session()
+        session.headers["User-Agent"] = USER_AGENT
+    return session
+
+
+def _get(
+    session: requests.Session, url: str, tries: int = 4, **kw
+) -> requests.Response:
+    """GET with a few retries and backoff (NCEI answers a burst with the odd 5xx or reset)."""
+    for k in range(tries):
+        try:
+            r = session.get(url, timeout=120, **kw)
+            if r.status_code < 500:
+                r.raise_for_status()
+                return r
+            err: Exception = requests.HTTPError(f"{r.status_code} for {url}")
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            err = exc
+        if k < tries - 1:
+            _time.sleep(2**k)
+    raise err
+
+
+def ncei_months(
+    start, end, session: requests.Session | None = None
+) -> dict[pd.Timestamp, str]:
+    """NCEI's accessions of hourly totals for the months that overlap [start, end): {first of month: accession}.
+    A month listed twice keeps the higher (later) accession number."""
+    session = _client(session)
+    first = _utc_naive(start).to_period("M").to_timestamp()
+    last = (_utc_naive(end) - pd.Timedelta(seconds=1)).to_period("M").to_timestamp()
+    found: dict[pd.Timestamp, str] = {}
+    for series in NCEI_SERIES:
+        at = 1
+        while True:
+            page = _get(
+                session,
+                NCEI_SEARCH,
+                params={"q": series, "start": at, "num": 200, "f": "json"},
+            ).json()
+            for item in page.get("results", []):
+                if not str(item.get("id", "")).startswith(series + "."):
+                    continue
+                m = _NCEI_TITLE.search(item.get("title", ""))
+                if not m:
+                    continue
+                month = pd.Timestamp(f"{m.group(1)} 1 {m.group(2)}")
+                if first <= month <= last and int(m.group(3)) > int(
+                    found.get(month, "0")
+                ):
+                    found[month] = m.group(3)
+            nxt = page.get("nextStart")
+            if not nxt or nxt <= at or nxt > page.get("total", 0):
+                break
+            at = nxt
+    return dict(sorted(found.items()))
+
+
+def ncei_accession_dir(
+    accession: str, session: requests.Session | None = None, known: dict | None = None
+) -> str:
+    """The folder of an accession's US East and Gulf Coast totals. NCEI files accessions under numbered ``arc``
+    folders; the newest are searched first. ``known`` (accession -> folder) is consulted and updated."""
+    if known is not None and accession in known:
+        return known[accession]
+    session = _client(session)
+    arcs = sorted(
+        set(re.findall(r'href="(arc\d+)/"', _get(session, NCEI_ARCHIVE).text)),
+        reverse=True,
+    )
+    for arc in arcs:
+        if f'href="{accession}/"' in _get(session, f"{NCEI_ARCHIVE}{arc}/").text:
+            url = f"{NCEI_ARCHIVE}{arc}/{accession}/1.1/data/0-data/USEGC/"
+            if known is not None:
+                known[accession] = url
+            return url
+    raise RuntimeError(f"NCEI accession {accession} not found under {NCEI_ARCHIVE}")
+
+
+def ncei_hours(
+    folder: str, grid: str, session: requests.Session | None = None
+) -> dict[pd.Timestamp, str]:
+    """The hourly files of one grid in an accession's folder: {hour: URL}; a reissued hour keeps the latest file."""
+    best: dict[pd.Timestamp, tuple[str, str]] = {}
+    for name, g, start, created in _NCEI_FILE.findall(
+        _get(_client(session), folder).text
+    ):
+        if g != grid:
+            continue
+        hour = pd.Timestamp(datetime.strptime(start, "%Y%m%d%H%M"))
+        if hour not in best or created > best[hour][1]:
+            best[hour] = (name, created)
+    return {h: folder + n for h, (n, _) in sorted(best.items())}
+
+
+def _ncei_hour(
+    session: requests.Session, url: str, bbox: BBox
+) -> tuple[xr.Dataset, dict]:
+    """One hourly file, the box cut out, values as stored."""
+    data = _get(session, url).content
+    with xr.open_dataset(
+        io.BytesIO(data), engine="h5netcdf", mask_and_scale=False
+    ) as ds:
+        ys, xs = box_slices(ds["lat"].values, ds["lon"].values, bbox)
+        names = [n for n in VARIABLES + SCALARS if n in ds]
+        return ds[names].isel(lat=ys, lon=xs).load(), dict(ds.attrs)
+
+
+def _read_index(store: Store) -> tuple[dict, Path | None]:
+    root = getattr(store, "root", None)
+    if root is None:
+        return {}, None
+    path = Path(root) / NCEI_INDEX
+    try:
+        return json.loads(path.read_text()), path
+    except (OSError, ValueError):
+        return {}, path
+
+
+def archive_ncei(
+    bbox: BBox,
+    start,
+    end,
+    grids: Sequence[str] = GRIDS,
+    store: Store | None = None,
+    session: requests.Session | None = None,
+    workers: int = 4,
+) -> dict[str, list[str]]:
+    """Archive the box's days in [start, end) from NCEI's monthly accessions, per grid, skipping days already kept
+    (from either source); return the names written per grid. A day is written with the hours NCEI holds for it.
+    Days in months NCEI has not published are left for NDBC. A day that fails is skipped and the rest carry on; the
+    call then raises, naming the days missed."""
+    session = _client(session)
+    store = store if store is not None else LocalStore()
+    t0, t1 = _utc_naive(start).normalize(), _utc_naive(end)
+    days = pd.date_range(t0, (t1 - pd.Timedelta(seconds=1)).normalize(), freq="D")
+    months = ncei_months(t0, t1, session)
+    known, index_path = _read_index(store)
+    written: dict[str, list[str]] = {g: [] for g in grids}
+    failed: list[str] = []
+    for grid in grids:
+        for month, accession in months.items():
+            todo = [
+                d
+                for d in days
+                if d.to_period("M").to_timestamp() == month
+                and not store.has(day_name(grid, bbox, d))
+            ]
+            if not todo:
+                continue
+            try:
+                folder = ncei_accession_dir(accession, session, known)
+                hours = ncei_hours(folder, grid, session)
+            except Exception as exc:
+                logger.warning(
+                    "NCEI %s %s (%s): %s", grid, f"{month:%Y-%m}", accession, exc
+                )
+                failed.append(f"{grid} {month:%Y-%m}")
+                continue
+            if index_path is not None:
+                index_path.parent.mkdir(parents=True, exist_ok=True)
+                index_path.write_text(json.dumps(known, indent=1, sort_keys=True))
+            for day in todo:
+                urls = [u for h, u in hours.items() if h.normalize() == day]
+                if not urls:
+                    logger.info(
+                        "NCEI %s %s: no hours in accession %s",
+                        grid,
+                        day.date(),
+                        accession,
+                    )
+                    continue
+                try:
+                    with ThreadPoolExecutor(max_workers=workers) as pool:
+                        got = list(
+                            pool.map(lambda u: _ncei_hour(session, u, bbox), urls)
+                        )
+                except Exception as exc:  # carry on; a later run fills the gap
+                    logger.warning("NCEI %s %s: %s", grid, day.date(), exc)
+                    failed.append(f"{grid} {day:%Y-%m-%d}")
+                    continue
+                sub = xr.concat(
+                    [g for g, _ in got],
+                    dim="time",
+                    data_vars="minimal",
+                    coords="minimal",
+                    compat="override",
+                    join="exact",
+                ).sortby("time")
+                ds = _normalize(
+                    sub,
+                    grid,
+                    bbox,
+                    got[0][1],
+                    datetime.now(timezone.utc),
+                    source=f"{NCEI}/archive/accession/{accession} ({folder})",
+                    credit=NCEI_CREDIT,
+                )
+                name = day_name(grid, bbox, day)
+                if store.put(name, day_file(ds, day)):
+                    written[grid].append(name)
+                    logger.info(
+                        "%s written (%d h, NCEI %s)", name, len(urls), accession
+                    )
+    if failed:
+        raise RuntimeError(
+            f"HF radar days not read from NCEI: {', '.join(failed)} (written: {written})"
+        )
+    return written
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    """Archive a box from NDBC (the last ~3 months) or NCEI (older months)."""
+    p = argparse.ArgumentParser(
+        prog="python -m forcingkit.fetchers.hfradar", description=main.__doc__
+    )
+    p.add_argument("source", choices=["ndbc", "ncei"])
+    p.add_argument(
+        "--box", nargs=4, type=float, required=True, metavar=("W", "S", "E", "N")
+    )
+    p.add_argument(
+        "--start", help="first day (ndbc: or 'all'; default the last 10 days)"
+    )
+    p.add_argument("--end", help="ncei: the day after the last; ndbc: the last day")
+    p.add_argument("--grids", nargs="+", default=list(GRIDS), choices=list(GRIDS))
+    p.add_argument(
+        "--root",
+        help="the archive's root (default: FORCINGKIT_HFRADAR_ARCHIVE, else the cache)",
+    )
+    p.add_argument(
+        "--workers", type=int, default=4, help="ncei: hourly files read at once"
+    )
+    p.add_argument("-v", "--verbose", action="store_true")
+    a = p.parse_args(argv)
+    logging.basicConfig(
+        level=logging.INFO if a.verbose else logging.WARNING,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    store = LocalStore(a.root)
+    if a.source == "ncei":
+        if not (a.start and a.end):
+            p.error("ncei needs --start and --end")
+        out = archive_ncei(
+            a.box, a.start, a.end, a.grids, store=store, workers=a.workers
+        )
+    else:
+        out = archive(a.box, a.start, a.end, a.grids, store=store)
+    print(json.dumps({g: len(n) for g, n in out.items()}))
+
+
+if __name__ == "__main__":
+    main()
