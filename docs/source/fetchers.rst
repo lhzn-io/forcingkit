@@ -199,7 +199,9 @@ These serve validation rather than forcing:
   accessions through NCEI's metadata search, reads each hour's file (about 0.8 MB at 1 km for the whole
   coast), cuts the box out and writes the same daily files, so ``load`` reads days from either source
   alike; ``source_dataset`` names the accession. Days already kept are skipped, and a day is written
-  with the hours NCEI holds (since 0.20.0). From the command line::
+  with the hours NCEI holds (since 0.20.0). The month list and folders found are kept in
+  ``ncei_accessions.json`` beside the archive, so a rerun skips NCEI's slow search (since 0.20.1).
+  From the command line::
 
       python -m forcingkit.fetchers.hfradar ncei --box -73.8 40.85 -71.8 41.3 \
           --start 2025-01-01 --end 2026-09-01 [--grids 1km 2km] [--root DIR] [--workers 4]

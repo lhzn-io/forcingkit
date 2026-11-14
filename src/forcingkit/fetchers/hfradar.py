@@ -115,11 +115,16 @@ NCEI_SEARCH = f"{NCEI}/metadata/granule/geoportal/opensearch"
 NCEI_ARCHIVE = f"{NCEI}/data/oceans/archive/"
 # The metadata series holding the hourly totals (the Radial series beside them hold each site's radials).
 NCEI_SERIES = ("IOOS-HFRadarRTVector", "NDBC-HFRadarRTVector")
-NCEI_INDEX = "ncei_accessions.json"  # accession -> its folder, beside the archive, so each is looked up once
+# Beside the archive: {"months": {"YYYY-MM": accession}, "accessions": {accession: folder}}, so the metadata
+# search (slow: minutes) and each folder lookup run once.
+NCEI_INDEX = "ncei_accessions.json"
 _NCEI_TITLE = re.compile(r"during ([A-Z][a-z]+) (\d{4}) \(NCEI Accession (\d+)\)")
+# Hourly file names: since 2026 ``rtv-usegc-<grid>-uwls_v1r0_hfr_s<YYYYmmddHHMM>..._c<created>.nc`` (a reissue
+# has a later ``c``); before, ``<YYYYmmddHHMM>_hfr_usegc_<grid>_rtv_uwls_NDBC.nc``.
 _NCEI_FILE = re.compile(
     r'href="(rtv-usegc-([126]km)-[^"/]*_s(\d{12})\d*_e\d+_c(\d+)\.nc)"'
 )
+_NCEI_FILE_OLD = re.compile(r'href="((\d{12})_hfr_usegc_([126]km)_rtv_[^"/]*\.nc)"')
 NAME = re.compile(
     r"usegc_[126]km/\d{2}\.\d{3}[NS]_\d{2}\.\d{3}[NS]_\d{3}\.\d{3}[EW]_\d{3}\.\d{3}[EW]/\d{4}/\d{2}/"
     r"hfradar_usegc_[126]km_\d{8}\.nc"
@@ -624,9 +629,11 @@ def ncei_hours(
 ) -> dict[pd.Timestamp, str]:
     """The hourly files of one grid in an accession's folder: {hour: URL}; a reissued hour keeps the latest file."""
     best: dict[pd.Timestamp, tuple[str, str]] = {}
-    for name, g, start, created in _NCEI_FILE.findall(
-        _get(_client(session), folder).text
-    ):
+    text = _get(_client(session), folder).text
+    found = _NCEI_FILE.findall(text) + [
+        (name, g, start, "") for name, start, g in _NCEI_FILE_OLD.findall(text)
+    ]
+    for name, g, start, created in found:
         if g != grid:
             continue
         hour = pd.Timestamp(datetime.strptime(start, "%Y%m%d%H%M"))
@@ -649,14 +656,26 @@ def _ncei_hour(
 
 
 def _read_index(store: Store) -> tuple[dict, Path | None]:
+    """The index beside a directory store, and its path (an empty index and None for other stores). 0.20.0 kept
+    the accessions only, as a flat map."""
     root = getattr(store, "root", None)
     if root is None:
-        return {}, None
+        return {"months": {}, "accessions": {}}, None
     path = Path(root) / NCEI_INDEX
     try:
-        return json.loads(path.read_text()), path
+        data = json.loads(path.read_text())
     except (OSError, ValueError):
-        return {}, path
+        data = {}
+    if "accessions" not in data:
+        data = {"months": {}, "accessions": data}
+    data.setdefault("months", {})
+    return data, path
+
+
+def _write_index(path: Path | None, index: dict) -> None:
+    if path is not None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(index, indent=1, sort_keys=True))
 
 
 def archive_ncei(
@@ -676,8 +695,15 @@ def archive_ncei(
     store = store if store is not None else LocalStore()
     t0, t1 = _utc_naive(start).normalize(), _utc_naive(end)
     days = pd.date_range(t0, (t1 - pd.Timedelta(seconds=1)).normalize(), freq="D")
-    months = ncei_months(t0, t1, session)
-    known, index_path = _read_index(store)
+    index, index_path = _read_index(store)
+    want = pd.period_range(t0, t1 - pd.Timedelta(seconds=1), freq="M")
+    if all(f"{m}" in index["months"] for m in want):
+        months = {m.to_timestamp(): index["months"][f"{m}"] for m in want}
+    else:  # a month not listed yet: search (months NCEI has not published stay unlisted)
+        months = ncei_months(t0, t1, session)
+        index["months"].update({f"{m:%Y-%m}": a for m, a in months.items()})
+        _write_index(index_path, index)
+    known = index["accessions"]
     written: dict[str, list[str]] = {g: [] for g in grids}
     failed: list[str] = []
     for grid in grids:
@@ -699,9 +725,7 @@ def archive_ncei(
                 )
                 failed.append(f"{grid} {month:%Y-%m}")
                 continue
-            if index_path is not None:
-                index_path.parent.mkdir(parents=True, exist_ok=True)
-                index_path.write_text(json.dumps(known, indent=1, sort_keys=True))
+            _write_index(index_path, index)
             for day in todo:
                 urls = [u for h, u in hours.items() if h.normalize() == day]
                 if not urls:

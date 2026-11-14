@@ -425,7 +425,10 @@ def test_an_ncei_day_stores_the_same_values_as_an_ndbc_day(tmp_path, ncei, remot
     )
     assert ACCESSION in x.attrs["source_dataset"] and "NCEI" in x.attrs["source_credit"]
     assert "id_HFR" not in x.attrs
-    assert json.loads((a.root / hfradar.NCEI_INDEX).read_text()) == {ACCESSION: FOLDER}
+    assert json.loads((a.root / hfradar.NCEI_INDEX).read_text()) == {
+        "months": {"2026-09": ACCESSION},
+        "accessions": {ACCESSION: FOLDER},
+    }
     assert hfradar.archive_ncei(
         BBOX, "2026-09-25", "2026-09-26", grids=("1km",), store=a
     ) == {"1km": []}
@@ -503,3 +506,54 @@ def test_cli_archives_from_ncei(tmp_path, ncei, capsys):
         ]
     )
     assert json.loads(capsys.readouterr().out) == {"1km": 2}
+
+
+def test_ncei_hours_read_the_older_file_names(tmp_path, ncei):
+    """Accessions through 2025 name their files ``<YYYYmmddHHMM>_hfr_usegc_<grid>_rtv_uwls_NDBC.nc``."""
+    new = hfradar.ncei_hours(FOLDER, "1km")
+    old = []
+    for t, url in new.items():
+        name = f"{t:%Y%m%d%H%M}_hfr_usegc_1km_rtv_uwls_NDBC.nc"
+        ncei["files"][FOLDER + name] = ncei["files"][url]
+        old.append(f'<a href="{name}">')
+    ncei["listing"][:] = old + [
+        '<a href="202609250000_hfr_usegc_2km_rtv_uwls_NDBC.nc">'
+    ]
+    hours = hfradar.ncei_hours(FOLDER, "1km")
+    assert list(hours) == list(new) and hours[pd.Timestamp("2026-09-25T05")].endswith(
+        "_rtv_uwls_NDBC.nc"
+    )
+    out = hfradar.archive_ncei(
+        BBOX,
+        "2026-09-25",
+        "2026-09-26",
+        grids=("1km",),
+        store=hfradar.LocalStore(tmp_path),
+    )
+    assert len(out["1km"]) == 1
+
+
+def test_a_rerun_over_listed_months_skips_the_search(tmp_path, ncei):
+    store = hfradar.LocalStore(tmp_path)
+    hfradar.archive_ncei(BBOX, "2026-09-25", "2026-09-26", grids=("1km",), store=store)
+    searches = ncei["gets"].count(hfradar.NCEI_SEARCH)
+    hfradar.archive_ncei(BBOX, "2026-09-26", "2026-09-27", grids=("1km",), store=store)
+    assert ncei["gets"].count(hfradar.NCEI_SEARCH) == searches
+    assert store.has(hfradar.day_name("1km", BBOX, pd.Timestamp("2026-09-26")))
+
+
+def test_the_0_20_0_index_is_read(tmp_path, ncei):
+    (tmp_path / hfradar.NCEI_INDEX).write_text(json.dumps({ACCESSION: FOLDER}))
+    hfradar.archive_ncei(
+        BBOX,
+        "2026-09-25",
+        "2026-09-26",
+        grids=("1km",),
+        store=hfradar.LocalStore(tmp_path),
+    )
+    assert (
+        f"{hfradar.NCEI_ARCHIVE}arc0002/" not in ncei["gets"]
+    )  # the folder came from the old index
+    assert json.loads((tmp_path / hfradar.NCEI_INDEX).read_text())["accessions"] == {
+        ACCESSION: FOLDER
+    }
