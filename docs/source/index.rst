@@ -135,6 +135,11 @@ Parent-ocean donors at a glance
      - Global; 1994 to the present
      - Legacy output; last-resort fallback; tidal only from 2024-09-05
 
+:doc:`Doppio <doppio>` (ROMS, about 7 km, 40 s-levels; an hourly reanalysis for 2007 to 2024 and
+a real-time system from 2017) is read as a full-depth subset for comparison with NECOFS, not yet
+as a parent-ocean donor. :doc:`shelf_models` surveys the other models and reanalyses of the
+region.
+
 Quick start
 -----------
 
@@ -178,6 +183,8 @@ PyPI as ``forcingkit``.
    necofs
    nyofs
    hycom
+   doppio
+   shelf_models
    atmospheric_forcing
    waves
    rivers

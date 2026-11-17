@@ -33,13 +33,14 @@ The primary goal of forcingkit is to provide clean, standardized ocean and atmos
 ## Current Coverage
 
 - **Oceanic Forcing**: NYOFS, NECOFS, DBOFS, HYCOM (global, 1994 to present).
+- **Ocean Model Comparison**: Doppio full-depth subsets on its own grid (Mid-Atlantic Bight and Gulf of Maine, about 7 km, hourly from 2007), in the NECOFS volume field names and units; not yet a parent-ocean donor.
 - **Atmospheric Forcing**: HRRR (3 km, hourly, 2014-07-30 to present), regridded to 0.03 degrees.
 - **Forecasts at Points**: HRRR (to 48 h) and ECCC's HRDPS (2.5 km, 10 m wind and gust to 48 h, from the MSC Datamart's 30-day window). HRDPS data: Data Source: Environment and Climate Change Canada ([license](https://eccc-msc.github.io/open-data/licence/readme_en/)).
 - **Surface Waves**: NWPS (one forecast office's grid per request, for example OKX CG1 at about 1.8 km, hourly, not regridded). NOMADS keeps about five days; older windows need an NWPS archive (`FORCINGKIT_NWPS_ARCHIVE`).
 
 ## Roadmap
 
-- **Coverage first**: a second global parent (Copernicus GLO12, GLORYS12 for 1993 on, NOAA RTOFS), the remaining NOAA forecast systems (West Coast, Gulf, Chesapeake, Great Lakes, Alaska), the Doppio reanalysis for 2007 to 2024 in the Northeast, HRRR Alaska and ECMWF IFS for the atmosphere, and a first European ocean source from Copernicus Marine (IBI or the North West Shelf).
+- **Coverage first**: a second global parent (Copernicus GLO12, GLORYS12 for 1993 on, NOAA RTOFS), the remaining NOAA forecast systems (West Coast, Gulf, Chesapeake, Great Lakes, Alaska), Doppio as a parent-ocean donor for 2007 to 2024 in the Northeast (its subsets are readable today), HRRR Alaska and ECMWF IFS for the atmosphere, and a first European ocean source from Copernicus Marine (IBI or the North West Shelf).
 - **Resolution second**: the NYOFS fine grid, the Monterey Bay nests of WCOFS, and SFBOFS inside San Francisco Bay.
 - **NYOFS and DBOFS as z-v3 parents**: both on true depths with geographic axes.
 - **Forecast mode and cache policy**: HRRR forecast cycles, and invalidation of forecast-built stores when a newer cycle is published.

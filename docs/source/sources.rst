@@ -41,6 +41,15 @@ Providers
        <https://www.ncei.noaa.gov/>`__ and on AWS through NOAA Open Data Dissemination
      - Blumberg and Mellor (1987) for POM (NYOFS); Shchepetkin and McWilliams (2005) for ROMS
        (DBOFS); NOAA attribution as for HRRR.
+   * - Doppio
+     - `Rutgers University Ocean Modeling Group <https://rucool.marine.rutgers.edu/>`__ for
+       `MARACOOS <https://maracoos.org/>`__; served from the `Rutgers THREDDS server
+       <https://tds.marine.rutgers.edu/thredds/catalog/roms/doppio/catalog.html>`__
+     - López et al. (2020) for the configuration and Wilkin et al. (2022) for the reanalysis
+       (both in :doc:`shelf_models`); for the reanalysis output, Wilkin and Levin (2022),
+       `doi:10.17882/89673 <https://doi.org/10.17882/89673>`__, as the catalog asks;
+       Shchepetkin and McWilliams (2005) for ROMS. The catalog marks the data "Freely
+       available".
    * - HYCOM
      - The `HYCOM consortium <https://www.hycom.org/>`__ (US Navy, NOAA and academic partners);
        from 2024-09-05 the US Navy's ESPC-D-V02 analysis, served by the consortium

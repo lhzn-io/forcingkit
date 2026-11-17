@@ -89,6 +89,11 @@ the box, hourly: 45 sigma layers with ``zeta``, element ``u``, ``v`` and ``w`` (
 m/s, up positive) and node ``T`` (degC) and ``S`` (PSU). ``from_necofs_volume(ds)`` converts a
 dataset already read.
 
+``doppio(bbox, start, end)`` reads Doppio ROMS through ``forcingkit.fetchers.doppio.volume`` (see
+:doc:`doppio`) and passes its water cells to ``structured`` (below), with the same field names as
+the NECOFS adapter. ``structured`` takes fixed layer heights, so the 40 s-levels are placed at
+the window's mean surface elevation. ``from_doppio_volume(ds)`` converts a dataset already read.
+
 ``structured(lon, lat, mask, z, times=..., fields=...)`` turns a regular grid (1-D axes) or a
 curvilinear one (2-D centres) into two triangles per cell, both carrying the cell's own value, so
 cells are drawn flat, as the model holds them. Cell corners lie midway between centres (for a

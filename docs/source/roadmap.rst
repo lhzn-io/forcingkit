@@ -224,7 +224,9 @@ Earlier years in the Northeast
      - ROMS with 4D-Var data assimilation, 7 km, 40 s-levels, hourly sea level, velocity,
        temperature and salinity from 2007-01-02 to 2024-12-31, Mid-Atlantic Bight and Gulf of
        Maine (López et al., 2020; Wilkin et al., 2022).
-     - A shelf-scale parent for 2007 to 2024, before the NECOFS archive begins.
+     - A shelf-scale parent for 2007 to 2024, before the NECOFS archive begins. Read today as a
+       full-depth subset on its own grid (:doc:`doppio`); the parent-ocean (``z-v3``) delivery
+       is still to do.
    * - **Doppio real time** (`Rutgers THREDDS
        <https://tds.marine.rutgers.edu/thredds/catalog/roms/doppio/catalog.html>`__)
      - The same model run forward with assimilation: hourly, from 2017-11-02 to two days ahead,

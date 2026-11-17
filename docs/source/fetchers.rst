@@ -93,6 +93,10 @@ Parent ocean (``/api/v1/obc``)
        attribute (``"none"``, ``"included"`` or ``"mixed"``). Last-resort fallback; legacy
        output layout.
 
+:doc:`Doppio <doppio>` is not a donor yet: ``forcingkit.fetchers.doppio.volume`` returns its
+full-depth subsets on the model's own grid for comparison with NECOFS, and the dispatcher does
+not rank it.
+
 `TPXO10 <https://www.tpxo.net/>`__ tidal harmonics are a roadmap item, not integrated; the
 `pyTMD <https://github.com/pyTMD/pyTMD>`__ dependency was removed on
 2026-10-05. The ``include_tides`` and ``tidal_model`` request fields

@@ -30,7 +30,8 @@ Adapters
 `necofs` reads NECOFS FVCOM GOM7 through `forcingkit.fetchers.necofs.volume` (sigma layers,
 element u, v and w, node temperature and salinity). `structured` turns a regular or curvilinear
 grid into two triangles per cell carrying the cell's own value, so flat cells are drawn as the
-model holds them; it is the basis for the NYOFS, DBOFS, HYCOM and HRRR adapters.
+model holds them; it is the basis for the NYOFS, DBOFS, HYCOM and HRRR adapters, and for `doppio`,
+which reads Doppio ROMS through `forcingkit.fetchers.doppio.volume`.
 """
 
 from __future__ import annotations
@@ -745,6 +746,45 @@ def necofs(bbox: Sequence[float], start, end, cache: bool = True) -> LayeredMesh
     from forcingkit.fetchers import necofs as fetch
 
     return from_necofs_volume(fetch.volume(list(bbox), start, end, cache=cache))
+
+
+def from_doppio_volume(ds) -> LayeredMesh:
+    """A `LayeredMesh` from a `forcingkit.fetchers.doppio.volume` (or `read_volume`) dataset:
+    the curvilinear cells through `structured`, water cells only, with u, v, w, T and S per cell.
+    `structured` takes fixed layer heights, so the s-levels are placed at the window's mean
+    surface elevation (on the shelf the tide moves them by under a meter)."""
+    h = ds["h"].values.astype(np.float64)
+    zeta = np.nan_to_num(np.nanmean(ds["zeta"].values, axis=0))
+    z = ds["siglay"].values * (h + zeta) + zeta
+    return structured(
+        ds["lon"].values,
+        ds["lat"].values,
+        ds["mask"].values,
+        z,
+        times=pd.DatetimeIndex(ds["time"].values),
+        fields={
+            "u": ds["u"].values,
+            "v": ds["v"].values,
+            "w": ds["ww"].values,
+            "T": ds["temp"].values,
+            "S": ds["salinity"].values,
+        },
+        meta=NECOFS_META,
+        bed_z=-h,
+        attrs={
+            "model": "doppio",
+            "source": ds.attrs.get("source", "Doppio ROMS"),
+            "bbox": [float(b) for b in ds.attrs.get("requested_bbox", [])],
+        },
+    )
+
+
+def doppio(bbox: Sequence[float], start, end, cache: bool = True) -> LayeredMesh:
+    """Doppio ROMS, every s-level, for the index rectangle around the cells whose centers lie in
+    `bbox` = (W, S, E, N), hourly from `start` to `end` inclusive (UTC)."""
+    from forcingkit.fetchers import doppio as fetch
+
+    return from_doppio_volume(fetch.volume(list(bbox), start, end, cache=cache))
 
 
 def _edges(c: np.ndarray) -> np.ndarray:
