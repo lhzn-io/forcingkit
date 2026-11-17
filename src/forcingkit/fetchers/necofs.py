@@ -42,6 +42,13 @@ NECOFS_GOM7_URL = "http://www.smast.umassd.edu:8080/thredds/dodsC/models/fvcom/N
 # Same variable names either way.
 NECOFS_HINDCAST_BASE = "http://www.smast.umassd.edu:8080/thredds/dodsC/models/fvcom/NECOFS/Archive/Seaplan_33_Hindcast_v1"
 NECOFS_HINDCAST_GOM3_LAST_YEAR = 2016
+# SMAST's monthly GOM7 archive (NECOFS_GOM/YYYY/necofs_YYYYMM.nc), from 2025, where the hindcast
+# above ends: the GOM7 system's own output concatenated by month, on the same mesh (node and element
+# coordinates, nv, h and siglay identical) with the same variables and time units. Each file holds
+# its month from 00:00 on the 1st to 23:00 on the last day, so unlike the hindcast it lacks the
+# 00:00 record of the next month; that record is read from the next month's file.
+NECOFS_GOM_ARCHIVE_BASE = "http://www.smast.umassd.edu:8080/thredds/dodsC/models/fvcom/NECOFS/Archive/NECOFS_GOM"
+NECOFS_GOM_ARCHIVE_FIRST_YEAR = 2025
 # Monthly files seen to exist; only hits are remembered, since a month may be published later.
 _HINDCAST_PRESENT: set[str] = set()
 
@@ -54,6 +61,28 @@ def necofs_hindcast_url(t: pd.Timestamp) -> str:
     return f"{NECOFS_HINDCAST_BASE}/necofs_{t.year}/NECOFS_{ym}.nc"
 
 
+def necofs_gom_archive_url(t: pd.Timestamp) -> str:
+    """URL of the monthly GOM7 archive file for the month containing `t` (whether or not it
+    exists)."""
+    return f"{NECOFS_GOM_ARCHIVE_BASE}/{t.year}/necofs_{t.strftime('%Y%m')}.nc"
+
+
+def necofs_monthly_urls(t: pd.Timestamp) -> list[str]:
+    """Monthly files that may hold the month containing `t`, in order of preference: the
+    hindcast, then (from 2025) the GOM7 monthly archive."""
+    urls = [necofs_hindcast_url(t)]
+    if t.year >= NECOFS_GOM_ARCHIVE_FIRST_YEAR:
+        urls.append(necofs_gom_archive_url(t))
+    return urls
+
+
+def _monthly_exists(url: str) -> bool:
+    if url in _HINDCAST_PRESENT or _dap_exists(url, timeout=30):
+        _HINDCAST_PRESENT.add(url)
+        return True
+    return False
+
+
 def necofs_product(url: str) -> str:
     """Which NECOFS product a file URL belongs to, for provenance."""
     if url == NECOFS_GOM7_URL:
@@ -63,6 +92,8 @@ def necofs_product(url: str) -> str:
     if url.startswith(NECOFS_HINDCAST_BASE):
         gom3 = url.rsplit("/", 1)[-1].startswith("gom3_")
         return f"{'GOM3' if gom3 else 'GOM7-mesh'} monthly hindcast (Seaplan_33_Hindcast_v1)"
+    if url.startswith(NECOFS_GOM_ARCHIVE_BASE):
+        return "GOM7 monthly archive (NECOFS_GOM)"
     return "NECOFS file"
 
 
@@ -81,11 +112,14 @@ def _dap_exists(url: str, timeout: float) -> bool:
 def get_necofs_url(target_dt: pd.Timestamp) -> str:
     """
     The NECOFS file to read for the day `target_dt`: the GOM7 daily history file if SMAST has it,
-    else the monthly hindcast file for that month, else the rolling GOM7 forecast.
+    else the monthly hindcast file for that month, else (from 2025) the monthly GOM7 archive file,
+    else the rolling GOM7 forecast.
 
     SMAST daily archives (e.g. 2026_03_03.nc) contain [Mar 2 01:00 to Mar 3 00:00]; the daily
     history starts in 2025. The monthly hindcast covers 1978 to the end of its latest published
-    year (2024 as of 2026-10). Callers check that the file holds the hours they need.
+    year (2024 as of 2026-10), and the monthly GOM7 archive 2025 (as of 2026-11). Callers check
+    that the file holds the hours they need; `necofs_url_for_hour` also handles the hour a
+    monthly GOM7 archive file lacks.
     """
     # NECOFS GOM7 daily history files contain data for the PREVIOUS day up to 00:00 of the CURRENT day.
     # Therefore to get data forward-looking from target_dt, we must ALWAYS fetch the file for the NEXT day.
@@ -98,16 +132,38 @@ def get_necofs_url(target_dt: pd.Timestamp) -> str:
         logger.info(f"Using historic NECOFS GOM7 archive: {history_url}")
         return history_url
 
-    # The day's hours run from target_dt 01:00 to the next midnight, which the month's file
-    # holds too (it ends at 00:00 on the 1st of the next month).
-    hindcast_url = necofs_hindcast_url(target_dt.normalize())
-    if hindcast_url in _HINDCAST_PRESENT or _dap_exists(hindcast_url, timeout=30):
-        _HINDCAST_PRESENT.add(hindcast_url)
-        logger.info(f"Using NECOFS monthly hindcast: {hindcast_url}")
-        return hindcast_url
+    # The day's hours run from target_dt 01:00 to the next midnight, which the month's hindcast
+    # file holds too (it ends at 00:00 on the 1st of the next month).
+    for monthly_url in necofs_monthly_urls(target_dt.normalize()):
+        if _monthly_exists(monthly_url):
+            logger.info(f"Using NECOFS monthly file: {monthly_url}")
+            return monthly_url
 
     logger.info("Falling back to NECOFS GOM7 rolling forecast.")
     return NECOFS_GOM7_URL
+
+
+def necofs_url_for_hour(
+    t: pd.Timestamp, url_by_day: Optional[dict[pd.Timestamp, str]] = None
+) -> str:
+    """The NECOFS file to read for the hourly record at `t`: `get_necofs_url` for the day file
+    that holds it, remembered in `url_by_day` (keyed by that file's date) when given.
+
+    A monthly GOM7 archive file ends at 23:00 on the last day of its month, so the 00:00 record on
+    the 1st of the next month comes from the next month's file when that exists.
+    """
+    day = necofs_archive_file_date(t)
+    if url_by_day is not None and day in url_by_day:
+        url = url_by_day[day]
+    else:
+        url = get_necofs_url(day - pd.Timedelta(days=1))
+        if url_by_day is not None:
+            url_by_day[day] = url
+    if url.startswith(NECOFS_GOM_ARCHIVE_BASE) and t == t.normalize() and t.day == 1:
+        next_month = necofs_gom_archive_url(t)
+        if next_month != url and _monthly_exists(next_month):
+            return next_month
+    return url
 
 
 # Parent-ocean delivery schema. Bump when the layout or meaning of the boundary store changes, so
@@ -342,9 +398,7 @@ def iter_parent(
     current_dt = target_dt
     end_dt = target_dt + pd.Timedelta(hours=duration_hours - 1)
     while current_dt <= end_dt:
-        # get_necofs_url(t) opens the file stamped t.normalize() + 1 day.
-        file_date = necofs_archive_file_date(current_dt)
-        dap_url = get_necofs_url(file_date - pd.Timedelta(days=1))
+        dap_url = necofs_url_for_hour(current_dt)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             ds_raw = _open_dap(dap_url)
@@ -1146,10 +1200,7 @@ def volume(
     groups: list[tuple[str, list[pd.Timestamp]]] = []
     url_by_day: dict[pd.Timestamp, str] = {}
     for t in wanted:
-        day = necofs_archive_file_date(t)
-        if day not in url_by_day:
-            url_by_day[day] = get_necofs_url(day - pd.Timedelta(days=1))
-        url = url_by_day[day]
+        url = necofs_url_for_hour(t, url_by_day)
         if groups and groups[-1][0] == url:
             groups[-1][1].append(t)
         else:

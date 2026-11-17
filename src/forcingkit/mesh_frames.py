@@ -157,8 +157,8 @@ def _necofs_surface(
 ) -> MeshFrames:
     """NECOFS FVCOM GOM7 top-layer currents at element centroids.
 
-    Each hour is read from the SMAST daily history file that holds it (via `get_necofs_url`, which
-    falls back to the rolling forecast); consecutive hours served by the same file are read in one
+    Each hour is read from the SMAST daily history file that holds it (via
+    `necofs_url_for_hour`, which falls back to the monthly files and then the rolling forecast); consecutive hours served by the same file are read in one
     request, and the results are concatenated with duplicate times dropped. `read_surface` keeps
     elements whose centroids lie in its box, so the box is widened by NECOFS_PAD_DEG to cover the
     requested one edge to edge.
@@ -173,10 +173,7 @@ def _necofs_surface(
     url_by_day: dict[pd.Timestamp, str] = {}
     groups: list[tuple[str, list[pd.Timestamp]]] = []
     for t in naive:
-        day = necofs.necofs_archive_file_date(t)
-        if day not in url_by_day:
-            url_by_day[day] = necofs.get_necofs_url(day - pd.Timedelta(days=1))
-        url = url_by_day[day]
+        url = necofs.necofs_url_for_hour(t, url_by_day)
         if groups and groups[-1][0] == url:
             groups[-1][1].append(t)
         else:

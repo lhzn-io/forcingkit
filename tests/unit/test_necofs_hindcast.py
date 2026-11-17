@@ -204,3 +204,212 @@ def test_parent_refuses_a_window_across_the_mesh_change(monkeypatch):
     )
     with pytest.raises(RuntimeError, match="different NECOFS mesh"):
         list(necofs.iter_parent("2016-12-31T22:00", 6, BBOX, pad_cells=1))
+
+
+# --- the monthly GOM7 archive (NECOFS_GOM), from 2025 ------------------------------------------
+
+GOM = necofs.NECOFS_GOM_ARCHIVE_BASE
+# The box of the 2025 regression: offshore, south of the islands, outside NYOFS and DBOFS.
+SHELF_BOX = [-70.6, 39.9, -70.2, 40.1]
+
+
+def _gom_month_times(month: str) -> pd.DatetimeIndex:
+    """A NECOFS_GOM month: 00:00 on the 1st to 23:00 on the last day, no next-month midnight."""
+    start = pd.Timestamp(month)
+    return pd.date_range(
+        start, start + pd.offsets.MonthBegin(1) - pd.Timedelta(hours=1), freq="1h"
+    )
+
+
+@pytest.mark.parametrize(
+    "t, expected",
+    [
+        ("2025-07-26 05:00", f"{GOM}/2025/necofs_202507.nc"),
+        ("2025-01-01", f"{GOM}/2025/necofs_202501.nc"),
+        ("2025-12-31 23:00", f"{GOM}/2025/necofs_202512.nc"),
+    ],
+)
+def test_gom_archive_url(t, expected):
+    assert necofs.necofs_gom_archive_url(pd.Timestamp(t)) == expected
+
+
+def test_monthly_candidates_by_year():
+    # 2024 and earlier: the hindcast alone, as before.
+    assert necofs.necofs_monthly_urls(pd.Timestamp("2024-12-31")) == [
+        f"{BASE}/necofs_2024/NECOFS_202412.nc"
+    ]
+    assert necofs.necofs_monthly_urls(pd.Timestamp("2016-05-01")) == [
+        f"{BASE}/gom3_201605.nc"
+    ]
+    # From 2025: the hindcast first (should SMAST extend it), then the GOM7 archive.
+    assert necofs.necofs_monthly_urls(pd.Timestamp("2025-07-23")) == [
+        f"{BASE}/necofs_2025/NECOFS_202507.nc",
+        f"{GOM}/2025/necofs_202507.nc",
+    ]
+
+
+def test_gom_archive_product_label():
+    assert (
+        necofs.necofs_product(f"{GOM}/2025/necofs_202507.nc")
+        == "GOM7 monthly archive (NECOFS_GOM)"
+    )
+
+
+def test_2025_day_without_history_uses_the_gom_archive(monkeypatch):
+    # 2025-07-27 is missing from the daily history, so the hours of 07-26 need a monthly file.
+    calls: list[str] = []
+    july = f"{GOM}/2025/necofs_202507.nc"
+    monkeypatch.setattr(necofs, "_dap_exists", _probe({july}, calls))
+    assert necofs.get_necofs_url(pd.Timestamp("2025-07-26")) == july
+    assert [c.rsplit("/", 2)[-2] for c in calls] == [
+        "necofs_history",
+        "necofs_2025",
+        "2025",
+    ]
+    # The archive file is remembered; the absent hindcast is probed again, since only files seen
+    # to exist are remembered.
+    assert necofs.get_necofs_url(pd.Timestamp("2025-07-27")) == july
+    assert [c.rsplit("/", 2)[-2] for c in calls[3:]] == [
+        "necofs_history",
+        "necofs_2025",
+    ]
+
+
+def test_2025_history_still_wins(monkeypatch):
+    calls: list[str] = []
+    daily = "NECOFS_GOM7_2025_07_24.nc"
+    monkeypatch.setattr(
+        necofs,
+        "_dap_exists",
+        lambda url, timeout: calls.append(url) or url.endswith(daily),
+    )
+    assert necofs.get_necofs_url(pd.Timestamp("2025-07-23")).endswith(daily)
+    assert len(calls) == 1
+
+
+def test_2025_hindcast_preferred_over_gom_archive(monkeypatch):
+    hindcast = f"{BASE}/necofs_2025/NECOFS_202507.nc"
+    gom = f"{GOM}/2025/necofs_202507.nc"
+    monkeypatch.setattr(necofs, "_dap_exists", _probe({hindcast, gom}, []))
+    assert necofs.get_necofs_url(pd.Timestamp("2025-07-26")) == hindcast
+
+
+def test_2024_never_probes_the_gom_archive(monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(necofs, "_dap_exists", _probe(set(), calls))
+    assert necofs.get_necofs_url(pd.Timestamp("2024-06-01")) == necofs.NECOFS_GOM7_URL
+    assert not any(c.startswith(GOM) for c in calls)
+
+
+def test_2025_order_ends_at_the_forecast(monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(necofs, "_dap_exists", _probe(set(), calls))
+    assert necofs.get_necofs_url(pd.Timestamp("2025-07-26")) == necofs.NECOFS_GOM7_URL
+    assert len(calls) == 3 and calls[2] == f"{GOM}/2025/necofs_202507.nc"
+
+
+def test_hour_url_month_end_midnight_reads_the_next_month(monkeypatch):
+    # A NECOFS_GOM file ends at 23:00 on the last day, so 00:00 on the 1st is in the next one.
+    july = f"{GOM}/2025/necofs_202507.nc"
+    august = f"{GOM}/2025/necofs_202508.nc"
+    monkeypatch.setattr(necofs, "_dap_exists", _probe({july, august}, []))
+    by_day: dict = {}
+    assert necofs.necofs_url_for_hour(pd.Timestamp("2025-07-31 23:00"), by_day) == july
+    assert (
+        necofs.necofs_url_for_hour(pd.Timestamp("2025-08-01 00:00"), by_day) == august
+    )
+    assert (
+        necofs.necofs_url_for_hour(pd.Timestamp("2025-08-01 01:00"), by_day) == august
+    )
+
+
+def test_hour_url_month_end_without_next_month(monkeypatch):
+    july = f"{GOM}/2025/necofs_202507.nc"
+    monkeypatch.setattr(necofs, "_dap_exists", _probe({july}, []))
+    assert necofs.necofs_url_for_hour(pd.Timestamp("2025-08-01 00:00")) == july
+
+
+def test_hour_url_leaves_the_hindcast_alone(monkeypatch):
+    # The hindcast holds the next month's midnight itself.
+    july = f"{BASE}/necofs_2022/NECOFS_202207.nc"
+    calls: list[str] = []
+    monkeypatch.setattr(necofs, "_dap_exists", _probe({july}, calls))
+    assert necofs.necofs_url_for_hour(pd.Timestamp("2022-08-01 00:00")) == july
+    assert not any(c.startswith(GOM) for c in calls)
+
+
+def test_parent_from_the_gom_archive_across_months(monkeypatch):
+    july = f"{GOM}/2025/necofs_202507.nc"
+    august = f"{GOM}/2025/necofs_202508.nc"
+    _serve(
+        monkeypatch,
+        {
+            july: _fvcom(_gom_month_times("2025-07-01")),
+            august: _fvcom(_gom_month_times("2025-08-01")),
+        },
+    )
+    items = list(necofs.iter_parent("2025-07-31T21:00", 6, BBOX, pad_cells=1))
+    static = items[0][1]
+    assert static.attrs["necofs_url"] == july
+    assert static.attrs["necofs_product"] == "GOM7 monthly archive (NECOFS_GOM)"
+    times = [r[1] for r in items[1:]]
+    assert times == list(pd.date_range("2025-07-31T21:00", periods=6, freq="1h"))
+
+
+def test_volume_across_the_gom_archive_month_end(monkeypatch):
+    july = f"{GOM}/2025/necofs_202507.nc"
+    august = f"{GOM}/2025/necofs_202508.nc"
+    monkeypatch.setattr(necofs, "_dap_exists", _probe({july, august}, []))
+    reads: list[tuple[str, pd.Timestamp, int]] = []
+
+    def reader(bbox, start, hours, dap_url=None, **kw):
+        reads.append((dap_url, start, hours))
+        held = _gom_month_times("2025-07-01" if dap_url == july else "2025-08-01")
+        t = pd.date_range(start, periods=hours, freq="1h").intersection(held)
+        return xr.Dataset(
+            {"u": (("time", "element"), np.zeros((len(t), 2), np.float32))},
+            coords={"time": t, "element_id": ("element", np.array([3, 4]))},
+        )
+
+    out = necofs.volume(
+        BBOX, "2025-07-31T22:00", "2025-08-01T01:00", cache=False, reader=reader
+    )
+    assert list(pd.DatetimeIndex(out["time"].values)) == list(
+        pd.date_range("2025-07-31T22:00", periods=4, freq="1h")
+    )
+    assert [r[0] for r in reads] == [july, august]
+
+
+def test_shelf_box_ranks_necofs_before_hycom():
+    from forcingkit import dispatcher
+
+    names = [
+        m.__name__.rsplit(".", 1)[-1]
+        for m, _, _ in dispatcher._rank_obc_candidates(SHELF_BOX)
+    ]
+    assert names[:2] == ["necofs", "hycom"]
+
+
+def test_dispatch_delivers_necofs_from_the_gom_archive(monkeypatch, tmp_path):
+    # A 2025 window whose daily history is missing: NECOFS delivers from the monthly archive and
+    # HYCOM is never asked.
+    from forcingkit import dispatcher
+    from forcingkit.fetchers import hycom
+
+    july = f"{GOM}/2025/necofs_202507.nc"
+    _serve(monkeypatch, {july: _fvcom(_gom_month_times("2025-07-01"))})
+
+    def no_hycom(*args, **kwargs):
+        raise AssertionError("HYCOM was asked although NECOFS has the window")
+
+    monkeypatch.setattr(hycom, "iter_parent", no_hycom, raising=False)
+    monkeypatch.setattr(hycom, "fetch_hycom_boundary_conditions", no_hycom)
+    path = dispatcher.dispatch_obc_request(
+        "2025-07-26T00:00",
+        4,
+        BBOX,
+        cache_dir=str(tmp_path),
+        pad_cells=1,
+        vertical_spacing_m=10.0,
+    )
+    assert dispatcher.delivered_obc_donor(path) == "necofs"

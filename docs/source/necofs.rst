@@ -97,6 +97,13 @@ All access is OPeNDAP from ``http://www.smast.umassd.edu:8080/thredds/dodsC/mode
      - ``Archive/Seaplan_33_Hindcast_v1/necofs_{yyyy}/NECOFS_{yyyy}{mm}.nc``
      - 2017 to 2024 (as of 2026-10-31). Hourly, from 00:00 on the 1st to 00:00 on the 1st of the
        next month (745 records for a 31-day month); same mesh and variables as the daily history.
+   * - Monthly GOM7 archive
+     - ``Archive/NECOFS_GOM/{yyyy}/necofs_{yyyy}{mm}.nc``
+     - All twelve months of 2025 (as of 2026-11-17). The GOM7 system's own output concatenated by
+       month, on the same mesh as the GOM7-mesh hindcast (node and element coordinates, ``nv``,
+       ``h`` and ``siglay`` identical) with the same variables and time units. Hourly, from 00:00
+       on the 1st to 23:00 on the last day (744 records for a 31-day month), so the 00:00 record
+       of the next month is read from the next month's file.
    * - Monthly hindcast, GOM3 mesh
      - ``Archive/Seaplan_33_Hindcast_v1/gom3_{yyyy}{mm}.nc``
      - 1978 to 2016, on the coarser GOM3 mesh (48,451 nodes against GOM7's 207,081), with the same
@@ -106,7 +113,8 @@ All access is OPeNDAP from ``http://www.smast.umassd.edu:8080/thredds/dodsC/mode
      - The current run; 193 time records on 2026-10-06.
 
 The history archive held 577 files on 2026-10-06, from 2025-01-01 to 2026-10-05. **66 days are
-missing**, so a run that needs one of them cannot be built from NECOFS:
+missing**. A run that needs a 2025 day among them reads the monthly GOM7 archive instead; one that
+needs a 2026 day cannot be built from NECOFS:
 
 - 2025-01-12 to 2025-01-25 (14 days, the longest gap);
 - 2025: 03-08, 04-01, 04-13, 05-22, 05-24 to 05-26, 06-06, 06-08, 06-14, 06-23, 07-27, 07-29,
@@ -114,9 +122,10 @@ missing**, so a run that needs one of them cannot be built from NECOFS:
 - 2026: 01-03, 02-16, 02-25, 03-08, 03-24, 05-16 to 05-17, 05-28, 06-06 to 06-09, 06-17,
   07-02 to 07-03, 07-13 to 07-15, 08-25.
 
-Dates before 2025 come from the monthly hindcast (``Seaplan_33_Hindcast_v1``); there is no hindcast
-for 2025 yet, so the gaps above still cannot be filled. Because each history file also holds the
-first hour of its own date, a missing file *D* removes hours 01:00 to 23:00 of *D* - 1 and the
+Dates before 2025 come from the monthly hindcast (``Seaplan_33_Hindcast_v1``). There is no hindcast
+for 2025 yet, so the 2025 gaps above are filled from the monthly GOM7 archive (``NECOFS_GOM``);
+the 2026 gaps still cannot be filled. Because each history file also holds the first hour of its
+own date, a missing file *D* removes hours 01:00 to 23:00 of *D* - 1 and the
 00:00 record of *D*. The ``necofs_2022`` folder also holds an empty stray, ``NECOFS_2022010.nc``,
 beside the real ``NECOFS_202210.nc``; forcingkit never asks for it.
 
@@ -128,8 +137,8 @@ vertical_spacing_m=2.0)`` is a generator; the dispatcher writes what it yields s
 
 1. **File choice.** For each hour the fetcher picks the history file that holds it and probes
    it (an HTTP request for its ``.dds``, 5 s timeout). If that probe fails, it probes the monthly
-   hindcast file for the month (30 s timeout; files seen to exist are remembered), and failing
-   that opens the rolling forecast, which serves recent hours and fails for older ones. The store
+   hindcast file for the month and, from 2025, the monthly GOM7 archive file (30 s timeout each;
+   files seen to exist are remembered), and failing that opens the rolling forecast, which serves recent hours and fails for older ones. The store
    records the first file read as ``necofs_product`` and ``necofs_url``. A window that crosses the
    GOM3 to GOM7 mesh change (the end of 2016) is refused; request it in two parts.
 2. **Target grid.** A regular 0.002 degree longitude/latitude grid (about 170 m east-west and
