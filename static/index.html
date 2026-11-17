@@ -9,6 +9,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Outfit:wght@500;700&display=swap"
         rel="stylesheet">
     <link rel="icon" href="logo.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
     <link rel="stylesheet" href="styles.css">
 </head>
 
@@ -56,6 +57,18 @@
     </div>
     <span id="datasetCount" class="badge">0</span>
 </div>
+                    <div class="coverage-filters">
+                        <div id="familyChips" class="chips"></div>
+                        <div class="filter-row">
+                            <select id="kindSelect" class="form-select" title="Kind of store"></select>
+                            <label class="toggle" title="List only stores that overlap the map view"><input type="checkbox" id="inViewToggle"> In map view</label>
+                        </div>
+                        <div class="filter-row">
+                            <input type="date" id="dateFrom" class="form-select" title="Covers this UTC day or later">
+                            <input type="date" id="dateTo" class="form-select" title="Covers this UTC day or earlier">
+                            <button id="clearFilters" type="button" class="btn">Clear</button>
+                        </div>
+                    </div>
                     <div id="datasetList" class="dataset-list">
                         <!-- Populated via JS -->
                         <div class="loading-state">
@@ -68,7 +81,16 @@
                 <!-- Preview Panel Column -->
                 <div class="preview-panel glass-panel">
                     <div class="preview-header">
-                        <h3>Interactive Preview</h3>
+                        <div class="pane-tabs">
+                            <button type="button" class="tab" data-pane="coverage">Coverage</button>
+                            <button type="button" class="tab" data-pane="preview">Preview</button>
+                        </div>
+                    </div>
+
+                    <div id="coveragePane" class="coverage-pane">
+                        <div id="coverageMap" class="coverage-map"></div>
+                        <div class="strip-head"><span>Hours covered per UTC day, by source</span><span id="stripNote"></span></div>
+                        <div id="coverageStrip" class="coverage-strip"></div>
                     </div>
 
                     <div id="previewControls" class="preview-controls hidden">
@@ -135,6 +157,10 @@
     <!-- Plotly.js component -->
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 
+    <!-- Coverage map: MapLibre, with PMTiles read by byte range for a local relief basemap. -->
+    <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+    <script src="https://unpkg.com/pmtiles@3.2.0/dist/pmtiles.js"></script>
+    <script defer src="coverage.js"></script>
     <script defer src="app.js"></script>
     <script type="importmap">
     { "imports": {

@@ -17,6 +17,18 @@ document.addEventListener("DOMContentLoaded", () => {
     let mode3d = false;
     const vectorPairs = [["u", "v"], ["water_u", "water_v"], ["u10", "v10"]];
 
+    // Coverage map and timeline (coverage.js): its filters narrow the list below.
+    function selectById(id) {
+        const item = currentInventory.find(i => i.id === id);
+        if (!item) return;
+        const card = document.querySelector(`.dataset-card[data-id="${CSS.escape(id)}"]`);
+        selectDataset(item, card || document.createElement("div"));
+        if (card) card.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    if (window.fkCoverage) {
+        window.fkCoverage.init({ rerender: () => renderInventory(currentInventory), select: selectById });
+    }
+
     // - Custom Modal System -
     function createModal() {
         const overlay = document.createElement("div");
@@ -88,15 +100,9 @@ document.addEventListener("DOMContentLoaded", () => {
     fetchInventory().then(() => {
         const hash = window.location.hash.replace('#', '');
         if (hash && currentInventory.length > 0) {
-            const match = currentInventory.find(item => item.id === hash);
-            if (match) {
+            if (currentInventory.some(item => item.id === hash)) {
                 console.log('Deep-link: auto-selecting', hash);
-                const cards = document.querySelectorAll('.dataset-card');
-                const idx = currentInventory.indexOf(match);
-                if (cards[idx]) {
-                    selectDataset(match, cards[idx]);
-                    cards[idx].scrollIntoView({ behavior: 'smooth', block: 'center' });
-                }
+                selectById(hash);
             }
         }
         // Start auto-polling after initial load
@@ -221,10 +227,20 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    function renderInventory(items) {
-        datasetCount.textContent = items.length;
+    function renderInventory(allItems) {
+        if (window.fkCoverage) window.fkCoverage.setInventory(allItems);
+        const items = window.fkCoverage ? window.fkCoverage.filter(allItems) : allItems;
+        datasetCount.textContent = items.length === allItems.length
+            ? items.length : `${items.length} of ${allItems.length}`;
         datasetList.innerHTML = "";
 
+        if (items.length === 0 && allItems.length > 0) {
+            datasetList.innerHTML = `
+                <div class="empty-state">
+                    <p>No stores match the filters.</p>
+                </div>`;
+            return;
+        }
         if (items.length === 0) {
             datasetList.innerHTML = `
                 <div class="empty-state">
@@ -240,6 +256,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             const card = document.createElement("div");
             card.className = "dataset-card";
+            card.dataset.id = item.id;
             if (selectedDataset && selectedDataset.id === item.id) {
                 card.classList.add("selected");
             }
@@ -262,10 +279,11 @@ document.addEventListener("DOMContentLoaded", () => {
               catLabel = "RAW GRB/NC DONOR (OCEAN/CURRENT)";
             }
 
-            const typeLabel = catLabel;
+            // The inventory's classification, when it has one, over the guess from the id prefix.
+            const typeLabel = item.kind ? item.kind.toUpperCase() : catLabel;
             const typeClass = catClass;
 
-            const donorLabel = item.donor_model ? `<span class="donor-label">${item.donor_model}</span>` : `<span class="donor-label">${item.source || ''}</span>`;
+            const donorLabel = item.family ? `<span class="donor-label">${item.family}</span>` : item.donor_model ? `<span class="donor-label">${item.donor_model}</span>` : `<span class="donor-label">${item.source || ''}</span>`;
             const resLabel = item.resolution ? `<span class="res-label">${item.resolution}</span>` : '';
             // Short hash from dataset ID (e.g. "bc_5439f3a2bf41" → "5439f3a2bf41")
             const hashId = item.id.replace(/^(bc_|ic_|obc_)/, '');
@@ -313,6 +331,7 @@ document.addEventListener("DOMContentLoaded", () => {
     function selectDataset(item, cardElement) {
         console.log("Dataset selected:", item.id);
         window.location.hash = item.id;  // Update URL for deep-linking
+        if (window.fkCoverage) window.fkCoverage.setSelected(item.id);
         document.querySelectorAll(".dataset-card").forEach(c => c.classList.remove("selected"));
         cardElement.classList.add("selected");
 

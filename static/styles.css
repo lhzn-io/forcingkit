@@ -699,3 +699,122 @@ h3 {
     color: #8b949e;
     font-size: 11px;
 }
+
+/* Coverage view (coverage.js) */
+.coverage-filters {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--panel-border);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.chip {
+    --chip: var(--accent);
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--chip);
+    color: var(--text-primary);
+    border-radius: 12px;
+    padding: 1px 9px;
+    font-size: 0.78rem;
+    cursor: pointer;
+}
+
+.chip-off {
+    border-color: var(--panel-border);
+    color: var(--text-secondary);
+    text-decoration: line-through;
+}
+
+.filter-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.filter-row .form-select {
+    flex: 1;
+    min-width: 0;
+}
+
+.toggle {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.pane-tabs {
+    display: flex;
+    gap: 4px;
+}
+
+.pane-tabs .tab {
+    background: transparent;
+    border: 1px solid var(--panel-border);
+    color: var(--text-secondary);
+    border-radius: 8px;
+    padding: 4px 12px;
+    font-size: 0.9rem;
+    cursor: pointer;
+}
+
+.pane-tabs .tab.active {
+    color: var(--text-primary);
+    border-color: var(--accent);
+}
+
+.coverage-pane {
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+    min-height: 0;
+    padding: 12px;
+    gap: 6px;
+}
+
+.coverage-map {
+    flex: 3;
+    min-height: 220px;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.strip-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.coverage-strip {
+    flex: 1;
+    min-height: 120px;
+}
+
+.preview-panel:not(.show-coverage) .coverage-pane,
+.preview-panel.show-coverage #previewControls,
+.preview-panel.show-coverage #previewCanvas {
+    display: none;
+}
+
+.fk-popup .maplibregl-popup-content {
+    background: #161b22;
+    color: var(--text-primary);
+    border: 1px solid var(--panel-border);
+    font-size: 0.78rem;
+    padding: 6px 9px;
+}
+
+.fk-popup .maplibregl-popup-tip {
+    display: none;
+}

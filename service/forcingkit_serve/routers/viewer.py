@@ -30,6 +30,145 @@ class CacheItem(BaseModel):
     resolution: str | None = None  # e.g. "~7km", "~200m", "~31km"
     spatial_extent: str | None = None  # e.g. "-71.25, 42.75 → -70.25, 43.50"
     target_date: str | None = None  # ISO timestamp from sidecar metadata (e.g. ICs)
+    # Structured fields for maps and coverage timelines (see store_footprint)
+    bbox: list[float] | None = None  # [west, south, east, north], degrees, west < east
+    time_start: str | None = None  # ISO 8601 UTC, first record (or the target date)
+    time_end: str | None = None  # ISO 8601 UTC, last record
+    family: str | None = (
+        None  # source model or provider, e.g. "NECOFS", "Doppio", "HRRR"
+    )
+    kind: str | None = None  # e.g. "ocean boundary", "ocean volume", "atmosphere"
+
+
+# Longitude/latitude variable pairs, most specific first. Coordinates or data variables.
+_LONLAT_PAIRS = (
+    ("lon_rho", "lat_rho"),
+    ("longitude", "latitude"),
+    ("lon", "lat"),
+    ("node_lon", "node_lat"),
+    ("lonc", "latc"),
+    ("mouth_lon", "mouth_lat"),
+    ("xi", "eta"),
+)
+_BBOX_ATTRS = ("bbox", "requested_bbox", "domain_bbox")
+# Family keywords searched in the store's path and its type/source/donor attributes.
+_FAMILIES = (
+    ("doppio", "Doppio"),
+    ("necofs", "NECOFS"),
+    ("fvcom", "NECOFS"),
+    ("nyofs", "NYOFS"),
+    ("dbofs", "DBOFS"),
+    ("hycom", "HYCOM"),
+    ("hrdps", "HRDPS"),
+    ("hrrr", "HRRR"),
+    ("era5", "ERA5"),
+    ("nwps", "NWPS"),
+    ("hfradar", "HF radar"),
+    ("usgs", "USGS rivers"),
+    ("regridded_ic", "Regridded IC"),
+)
+_KINDS = (
+    ("volume", "ocean volume"),
+    ("obc", "ocean boundary"),
+    ("ic_regrid", "initial condition"),
+    ("ic", "initial condition"),
+    ("lev", "atmosphere levels"),
+    ("atm", "atmosphere"),
+    ("bc", "atmosphere"),
+    ("wav", "waves"),
+    ("nwps", "waves"),
+    ("riv", "rivers"),
+    ("hfradar", "surface currents (radar)"),
+)
+
+
+def _bbox_from(lon, lat) -> list[float] | None:
+    import numpy as np
+
+    x = np.asarray(lon, dtype=np.float64).ravel()
+    y = np.asarray(lat, dtype=np.float64).ravel()
+    x, y = x[np.isfinite(x)], y[np.isfinite(y)]
+    if x.size == 0 or y.size == 0:
+        return None
+    # Index axes (0, 1, 2, ...) are not positions.
+    if x.size > 2 and np.array_equal(x, np.arange(x.size)):
+        return None
+    if np.abs(y).max() > 90 or x.min() < -180 or x.max() > 360:
+        return None
+    x = np.where(x > 180, x - 360, x)
+    return [round(float(v), 4) for v in (x.min(), y.min(), x.max(), y.max())]
+
+
+def store_footprint(ds, path: Path) -> dict:
+    """Numeric bbox, ISO time span, source family and kind of a cached dataset, for the
+    inventory's map and coverage timeline. Every field is None when it cannot be told."""
+    import json
+
+    import numpy as np
+    import pandas as pd
+
+    out: dict = {"bbox": None, "time_start": None, "time_end": None}
+    for lo, la in _LONLAT_PAIRS:
+        if lo in ds.variables and la in ds.variables:
+            try:
+                out["bbox"] = _bbox_from(ds[lo].values, ds[la].values)
+            except Exception:
+                out["bbox"] = None
+            if out["bbox"]:
+                break
+    if not out["bbox"]:
+        for key in _BBOX_ATTRS:
+            try:
+                b = ds.attrs.get(key)
+                b = json.loads(b) if isinstance(b, str) else b
+                if b is not None and len(b) == 4:
+                    out["bbox"] = _bbox_from([b[0], b[2]], [b[1], b[3]])
+                    break
+            except Exception:
+                continue
+
+    def iso(t) -> str | None:
+        try:
+            ts = pd.Timestamp(t)
+            if ts.tzinfo is not None:
+                ts = ts.tz_convert("UTC").tz_localize(None)
+            return None if pd.isna(ts) else ts.strftime("%Y-%m-%dT%H:%M:%SZ")
+        except Exception:
+            return None
+
+    tname = next((n for n in ("time", "valid_time", "t") if n in ds.variables), None)
+    if tname is not None:
+        tv = np.atleast_1d(ds[tname].values)
+        if tv.size and np.issubdtype(tv.dtype, np.datetime64):
+            out["time_start"], out["time_end"] = iso(tv.min()), iso(tv.max())
+    if out["time_start"] is None and ds.attrs.get("target_date"):
+        out["time_start"] = out["time_end"] = iso(ds.attrs["target_date"])
+    if out["time_start"] is None and ds.attrs.get("start_time"):
+        out["time_start"] = out["time_end"] = iso(ds.attrs["start_time"])
+
+    text = " ".join(
+        [str(path).lower()]
+        + [
+            str(ds.attrs.get(k, "")).lower()
+            for k in (
+                "type",
+                "source",
+                "donor_id",
+                "donor",
+                "forcingkit:donor",
+                "schema",
+            )
+        ]
+    )
+    out["family"] = next((name for key, name in _FAMILIES if key in text), None)
+    stem = path.name.lower()
+    out["kind"] = next(
+        (name for key, name in _KINDS if stem.startswith(key) or f"_{key}_" in stem),
+        None,
+    )
+    if out["kind"] is None and path.suffix.lower() in (".grib", ".grib2", ".nc"):
+        out["kind"] = "raw donor file"
+    return out
 
 
 def _enrich_zarr_metadata(zarr_path: Path) -> dict:
@@ -206,7 +345,9 @@ def _enrich_zarr_metadata(zarr_path: Path) -> dict:
                 pass
 
         label = None
+        footprint = store_footprint(ds, zarr_path)
         return {
+            **footprint,
             "label": locals().get("label", None),
             "variables": locals().get("variables", []),
             "grid_shape": locals().get("grid_shape", None),
@@ -224,10 +365,39 @@ def _enrich_zarr_metadata(zarr_path: Path) -> dict:
         return {}
 
 
+# Inventory entries by path, with the key they were built under: a store is reopened only when
+# its metadata files change, so the page's two-second poll stays cheap.
+_INVENTORY_CACHE: dict[str, tuple[tuple, CacheItem]] = {}
+_ZARR_KEY_FILES = (
+    ".zmetadata",
+    ".zattrs",
+    ".zgroup",
+    "zarr.json",
+    "time/.zarray",
+    "time/zarr.json",
+)
+
+
+def _zarr_key(path: Path) -> tuple:
+    key = [("dir", path.stat().st_mtime_ns)]
+    for name in _ZARR_KEY_FILES:
+        try:
+            key.append((name, (path / name).stat().st_mtime_ns))
+        except OSError:
+            pass
+    return tuple(key)
+
+
 @router.get("/inventory", response_model=List[CacheItem])
 async def get_cache_inventory(response: FastAPIResponse):
     """Crawls the local data cache and returns an inventory of all processed forcing datasets."""
+    from starlette.concurrency import run_in_threadpool
+
     response.headers["Cache-Control"] = "no-store"
+    return await run_in_threadpool(_crawl_inventory)
+
+
+def _crawl_inventory() -> list[CacheItem]:
     cache_dir = Path(Path(settings.cache_dir()).expanduser())
     if not cache_dir.exists():
         return []
@@ -235,8 +405,18 @@ async def get_cache_inventory(response: FastAPIResponse):
     inventory = []
 
     # 1. Find Zarr datasets (directories)
+    seen: set[str] = set()
     for zarr_path in cache_dir.rglob("*.zarr"):
         if zarr_path.is_dir():
+            seen.add(str(zarr_path))
+            try:
+                ckey = _zarr_key(zarr_path)
+            except OSError:
+                continue
+            hit = _INVENTORY_CACHE.get(str(zarr_path))
+            if hit and hit[0] == ckey:
+                inventory.append(hit[1])
+                continue
             size_bytes = sum(
                 f.stat().st_size for f in zarr_path.rglob("*") if f.is_file()
             )
@@ -251,11 +431,19 @@ async def get_cache_inventory(response: FastAPIResponse):
                     **meta,
                 )
             )
+            _INVENTORY_CACHE[str(zarr_path)] = (ckey, inventory[-1])
 
     # 2. Find GRIB/NC datasets (files)
     for ext_glob in ["*.grib", "*.grib2", "*.nc"]:
         for file_path in cache_dir.rglob(ext_glob):
             if file_path.is_file():
+                seen.add(str(file_path))
+                st = file_path.stat()
+                ckey = (st.st_mtime_ns, st.st_size)
+                hit = _INVENTORY_CACHE.get(str(file_path))
+                if hit and hit[0] == ckey:
+                    inventory.append(hit[1])
+                    continue
                 stem = file_path.stem.lower()
                 label = None
                 source = None
@@ -264,6 +452,7 @@ async def get_cache_inventory(response: FastAPIResponse):
                 grid_shape = None
                 spatial_extent = None
                 resolution = None
+                footprint: dict = {}
 
                 if "hrrr" in stem:
                     if "_f" in stem:
@@ -294,12 +483,19 @@ async def get_cache_inventory(response: FastAPIResponse):
                     logging.getLogger("cfgrib.messages").setLevel(logging.ERROR)
 
                     gds = None
-                    for _inv_filter in [
-                        {"typeOfLevel": "heightAboveGround", "stepType": "instant"},
-                        {"typeOfLevel": "surface", "stepType": "instant"},
-                        {"typeOfLevel": "heightAboveGround"},
-                        {"typeOfLevel": "surface"},
-                    ]:
+                    # NetCDF files are not GRIB: open them directly rather than failing in
+                    # cfgrib once per filter first.
+                    _grib_filters = (
+                        []
+                        if file_path.suffix.lower() == ".nc"
+                        else [
+                            {"typeOfLevel": "heightAboveGround", "stepType": "instant"},
+                            {"typeOfLevel": "surface", "stepType": "instant"},
+                            {"typeOfLevel": "heightAboveGround"},
+                            {"typeOfLevel": "surface"},
+                        ]
+                    )
+                    for _inv_filter in _grib_filters:
                         try:
                             _candidate = xr.open_dataset(
                                 str(file_path),
@@ -419,12 +615,17 @@ async def get_cache_inventory(response: FastAPIResponse):
                                             if avg_m >= 1000
                                             else f"~{avg_m:.0f}m"
                                         )
+                        footprint = store_footprint(gds, file_path)
                         gds.close()
                 except Exception as enrich_err:
                     logger.debug(
                         f"GRIB enrichment failed for {file_path.name}: {enrich_err}"
                     )
 
+                if not footprint:
+                    import xarray as xr
+
+                    footprint = store_footprint(xr.Dataset(), file_path)
                 inventory.append(
                     CacheItem(
                         id=file_path.stem,
@@ -441,9 +642,13 @@ async def get_cache_inventory(response: FastAPIResponse):
                         resolution=resolution,
                         time_steps=time_steps,
                         time_range=time_range,
+                        **footprint,
                     )
                 )
+                _INVENTORY_CACHE[str(file_path)] = (ckey, inventory[-1])
 
+    for gone in set(_INVENTORY_CACHE) - seen:
+        _INVENTORY_CACHE.pop(gone, None)
     # Sort by descending modification time (newest first)
     inventory.sort(key=lambda x: x.modified_time, reverse=True)
     return inventory
@@ -1208,3 +1413,69 @@ async def get_point_value(
     except Exception as e:
         logger.error(f"Failed to query point value: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# Relief basemap for the coverage map: PMTiles archives in FORCINGKIT_BASEMAP_DIR (raster WebP or
+# PNG tiles, optional <name>.coast.geojson shoreline), read by the page in byte ranges. Without
+# the setting the page uses the fallback vector style below.
+BASEMAP_FALLBACK_STYLE = "https://tiles.openfreemap.org/styles/dark"
+
+
+def _basemap_dir() -> Path | None:
+    d = settings.env("FORCINGKIT_BASEMAP_DIR")
+    if not d:
+        return None
+    path = Path(d).expanduser()
+    return path if path.is_dir() else None
+
+
+def _basemap_files() -> dict[str, Path]:
+    d = _basemap_dir()
+    if d is None:
+        return {}
+    return {
+        f.name: f
+        for f in sorted(d.iterdir())
+        if f.is_file() and (f.suffix == ".pmtiles" or f.name.endswith(".coast.geojson"))
+    }
+
+
+@router.get("/basemap")
+async def get_basemaps():
+    """The relief archives the coverage map draws, and the style it falls back to."""
+    files = _basemap_files()
+    basemaps = [
+        {
+            "name": f.stem,
+            "file": name,
+            "size_mb": round(f.stat().st_size / 2**20, 1),
+            "shoreline": f"{f.stem}.coast.geojson"
+            if f"{f.stem}.coast.geojson" in files
+            else None,
+        }
+        for name, f in files.items()
+        if f.suffix == ".pmtiles"
+    ]
+    return {
+        "basemaps": basemaps,
+        "attribution": settings.env("FORCINGKIT_BASEMAP_ATTRIBUTION") or "",
+        "fallback_style": BASEMAP_FALLBACK_STYLE,
+    }
+
+
+@router.get("/basemap/files/{name}")
+async def get_basemap_file(name: str):
+    """One basemap file; byte ranges are honoured, which the PMTiles reader relies on."""
+    from fastapi.responses import FileResponse
+
+    f = _basemap_files().get(name)
+    if f is None:
+        raise HTTPException(status_code=404, detail="no such basemap file")
+    media = (
+        "application/geo+json"
+        if name.endswith(".geojson")
+        else "application/octet-stream"
+    )
+    return FileResponse(
+        f, media_type=media, headers={"Cache-Control": "public, max-age=3600"}
+    )

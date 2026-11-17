@@ -119,9 +119,10 @@ Limits
   model inside canyons.
 - **Sea level datum.** ``zeta`` is relative to the model's own mean sea level; the Rutgers
   metadata names no geodetic datum.
-- **Cache viewer.** The service's cache inventory (``/api/v1/cache/inventory``) lists the stores
-  under ``doppio/volume/`` with their extent and variables. Its image preview opens only stores
-  at the top of the cache directory, so it does not yet preview Doppio or NECOFS volume stores.
+- **Cache viewer.** The cache viewer (:doc:`cache_viewer`) lists the stores under
+  ``doppio/volume/`` and draws their footprints on its coverage map. Its image preview opens
+  only stores at the top of the cache directory, so it does not yet preview Doppio or NECOFS
+  volume stores.
 
 Credit
 ------

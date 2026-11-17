@@ -92,7 +92,8 @@ What it serves
        finished stores read-only over HTTP at ``/api/v1/stores/``. Used by the Python client; see
        :doc:`client`.
    * - ``/api/v1/cache/...`` and ``/ui/``
-     - The cache viewer: an inventory of every store, with 2D and 3D previews.
+     - The cache viewer: an inventory of every store, with a coverage map and timeline and 2D
+       and 3D previews. See :doc:`cache_viewer`.
 
 Each generating route has ``/download/{zarr_id}`` and, for the parent ocean, ``/cache`` and
 ``/predict-donor`` companions. The running service publishes its full OpenAPI description at
@@ -194,6 +195,7 @@ PyPI as ``forcingkit``.
    :caption: Reference
 
    client
+   cache_viewer
    mesh_frames
    layered_mesh
    sources
