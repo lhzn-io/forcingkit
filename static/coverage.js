@@ -131,12 +131,59 @@
     let mapReady = false;
     let popup = null;
 
-    async function basemapStyle() {
+    // The basemap credit folded into its (i) button, which opens it, so it takes no room on the
+    // map. MapLibre's compact control starts open; once folded it stays folded until clicked.
+    function collapseAttribution(m) {
+        m.getContainer().querySelectorAll(".maplibregl-ctrl-attrib.maplibregl-compact").forEach((el) => {
+            el.classList.remove("maplibregl-compact-show");
+            el.removeAttribute("open");
+        });
+    }
+
+    // One style promise for both maps (the coverage map and the preview map): the PMTiles
+    // protocol is registered once.
+    let stylePromise = null;
+    function basemapStyle() {
+        if (!stylePromise) stylePromise = buildBasemapStyle();
+        return stylePromise;
+    }
+
+    // The fallback vector style (OpenMapTiles schema) cut down to land, water and the shoreline:
+    // no roads, buildings, places, labels or boundaries, so the data drawn over it carries the
+    // map. Land is the background; water a fill one step darker; the shoreline a thin line on
+    // the water's edge; rivers faint. Returns the style URL itself if it cannot be read.
+    const BASE_LAND = "#161b22", BASE_WATER = "#0b0f14", BASE_SHORE = "#3b5868";
+    async function coastOnly(url) {
+        let style;
+        try {
+            style = await (await fetch(url)).json();
+        } catch (e) {
+            console.warn("basemap style unreadable, using it as is", e);
+            return url;
+        }
+        const src = Object.keys(style.sources || {}).find((k) => style.sources[k].type === "vector");
+        if (!src) return url;
+        style.layers = [
+            { id: "land", type: "background", paint: { "background-color": BASE_LAND } },
+            { id: "water", type: "fill", source: src, "source-layer": "water",
+              paint: { "fill-color": BASE_WATER, "fill-antialias": true } },
+            { id: "rivers", type: "line", source: src, "source-layer": "waterway",
+              paint: { "line-color": BASE_SHORE, "line-opacity": 0.5, "line-width": ["interpolate", ["linear"], ["zoom"], 8, 0.3, 14, 1.2] } },
+            { id: "shoreline", type: "line", source: src, "source-layer": "water",
+              paint: { "line-color": BASE_SHORE, "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.4, 12, 1.2] } },
+        ];
+        // No labels left to draw: no glyphs or sprite needed.
+        delete style.glyphs;
+        delete style.sprite;
+        return style;
+    }
+
+    async function buildBasemapStyle() {
         let cfg = { basemaps: [], attribution: "", fallback_style: "https://tiles.openfreemap.org/styles/dark" };
         try {
             cfg = await (await fetch("/api/v1/cache/basemap", { cache: "no-store" })).json();
         } catch (_) { /* fall back */ }
-        if (!cfg.basemaps || !cfg.basemaps.length || !window.pmtiles) return cfg.fallback_style;
+        if (!cfg.basemaps || !cfg.basemaps.length || !window.pmtiles) return coastOnly(cfg.fallback_style);
         const protocol = new pmtiles.Protocol();
         maplibregl.addProtocol("pmtiles", protocol.tile);
         const style = {
@@ -220,6 +267,7 @@
         map.on("error", (e) => console.warn("coverage map:", e && e.error ? e.error.message : e));
         popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, className: "fk-popup" });
         map.on("load", () => {
+            collapseAttribution(map);
             map.addSource("stores", { type: "geojson", data: storesGeoJSON() });
             map.addLayer({
                 id: "stores", type: "line", source: "stores",
@@ -366,6 +414,8 @@
             showPane("preview");
         },
         showPane,
+        basemapStyle,
+        collapseAttribution,
         // For debugging in the console: the MapLibre map, once made.
         get map() { return map; },
     };

@@ -24,9 +24,9 @@ from forcingkit_serve.jobs import Job  # noqa: E402
 from forcingkit_serve.routers import (  # noqa: E402
     viewer,
     bathymetry,
-    plotly_api,
     removed,
     stores,
+    view as view_api,
 )
 from forcingkit.fetchers.noaa import fetch_noaa_tide_data  # noqa: E402
 from importlib.metadata import version as _package_version  # noqa: E402
@@ -103,7 +103,7 @@ app.add_middleware(
 
 app.include_router(viewer.router)
 app.include_router(bathymetry.router)
-app.include_router(plotly_api.router)
+app.include_router(view_api.router)
 app.include_router(stores.router)
 # 410 Gone stubs for the routes removed on 2026-10-05; drop at the next release.
 app.include_router(removed.router)
