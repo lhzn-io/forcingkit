@@ -407,13 +407,19 @@ export class Scene3D {
         if (!this.luts.has(field)) this.luts.set(field, lutTexture(api.ramp(f)));
         const lut = this.luts.get(field);
         const levels = f.layered ? this.levels : [];
-        const [codes, levelData] = await Promise.all([
+        // Everything a record needs is requested at once, not one after another.
+        const vec = this.m.vectors[0];
+        const wantTracers = this.showTracers && vec;
+        const [codes, levelData, tracerData] = await Promise.all([
             api.frame(this.id, field, 0, t, "3d"),
-            Promise.all(levels.map(async (k) => ({
-                k,
-                codes: await api.frame(this.id, field, k, t, "3d"),
-                z: this.nominal ? null : await api.heights(this.id, k, t, "3d"),
-            }))),
+            Promise.all(levels.map(async (k) => {
+                const [c, z] = await Promise.all([
+                    api.frame(this.id, field, k, t, "3d"),
+                    this.nominal ? null : api.heights(this.id, k, t, "3d"),
+                ]);
+                return { k, codes: c, z };
+            })),
+            wantTracers ? api.tracers(this.id, vec.name, t, "3d") : null,
         ]);
         if (token !== this.token) return;
         this._setCodes(this.objects.surface, codes, lut);
@@ -424,7 +430,7 @@ export class Scene3D {
             if (!keep.has(k)) { this.scene.remove(obj); dispose(obj); this.objects.levels.delete(k); }
         }
         for (const { k, codes: c, z } of levelData) this._levelMap(k, c, z, lut);
-        await this._tracers(t, token);
+        this._tracers(tracerData);
         this._curtain();
         if (this._fitPending) {
             this._fitPending = false;
@@ -464,11 +470,9 @@ export class Scene3D {
         this._setCodes(obj, codes, lut);
     }
 
-    async _tracers(t, token) {
-        const vec = this.m.vectors[0];
-        if (!this.showTracers || !vec) { this.tracers.object.visible = false; return; }
-        const d = await api.tracers(this.id, vec.name, t, "3d");
-        if (token !== this.token) return;
+    // Tracers from one record's velocities (null: tracers off or no vector pair).
+    _tracers(d) {
+        if (!d) { this.tracers.object.visible = false; return; }
         const tri = this.geom.tri, items = [], nl = Math.max(1, this.m.layers.length);
         d.element.forEach((e, c) => {
             const P = [0, 1, 2].map((j) => { const v = tri[3 * e + j]; return [this.mx[v], this.my[v]]; });

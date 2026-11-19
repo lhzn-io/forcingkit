@@ -8,6 +8,9 @@ little-endian.
 from __future__ import annotations
 
 import logging
+import threading
+import time
+from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
@@ -15,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
+from forcingkit import settings
 from forcingkit_serve import view_store
 from forcingkit_serve.routers.viewer import _crawl_inventory
 
@@ -26,18 +30,55 @@ Detail = Query("2d", pattern="^(2d|3d)$", description="Cell budget: 2d or 3d")
 BINARY = "application/octet-stream"
 
 
+# Crawling the whole cache takes about 0.4 s on a cache of a few hundred stores, far more than
+# drawing a cached record, so the store ids the crawl found are reused for a few seconds.
+# Only ids a crawl listed resolve, and a store whose path is gone is looked up again.
+RESOLVE_TTL_S = 10.0
+_resolved: dict[str, Any] = {"dir": None, "at": 0.0, "stores": {}}
+_resolve_lock = threading.Lock()
+
+
+def _fresh(cache_dir: str) -> bool:
+    return (
+        _resolved["dir"] == cache_dir
+        and time.monotonic() - _resolved["at"] < RESOLVE_TTL_S
+    )
+
+
+def _locate(dataset_id: str) -> tuple[Path, Any] | None:
+    """The store's path and change key (from the inventory), or None."""
+    cache_dir = str(settings.cache_dir())
+    if _fresh(cache_dir):
+        hit = _resolved["stores"].get(dataset_id)
+        if hit is not None and hit[0].exists():
+            return hit
+    with _resolve_lock:
+        # Another request may have crawled while this one waited.
+        hit = _resolved["stores"].get(dataset_id) if _fresh(cache_dir) else None
+        if hit is None or not hit[0].exists():
+            items = _crawl_inventory()
+            _resolved["stores"] = {
+                i.id: (Path(i.path), (i.modified_time, i.size_mb)) for i in items
+            }
+            _resolved["dir"], _resolved["at"] = cache_dir, time.monotonic()
+        return _resolved["stores"].get(dataset_id)
+
+
+def forget_stores() -> None:
+    """Drop the remembered store ids, so the next request crawls the cache."""
+    with _resolve_lock:
+        _resolved.update(dir=None, at=0.0, stores={})
+
+
 def _view(dataset_id: str, detail: str) -> view_store.StoreView:
-    items = _crawl_inventory()
-    path = view_store.resolve_store(dataset_id, items)
-    if path is None:
+    found = _locate(dataset_id)
+    if found is None:
         raise HTTPException(
             status_code=404, detail=f"No store {dataset_id} in the cache."
         )
-    item = next(i for i in items if i.id == dataset_id)
+    path, key = found
     try:
-        return view_store.get_view(
-            dataset_id, path, detail, (item.modified_time, item.size_mb)
-        )
+        return view_store.get_view(dataset_id, path, detail, key)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 

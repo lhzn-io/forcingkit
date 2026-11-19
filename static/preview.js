@@ -221,6 +221,19 @@ async function setMode(mode, quiet) {
 
 // ---- drawing --------------------------------------------------------------------------------
 
+// Sliders fire many times a second. One draw runs at a time; changes that arrive meanwhile are
+// folded into one more draw of the latest state when it finishes, so dragging never queues up
+// records the pointer has already left.
+let drawing = null, drawAgain = false;
+
+function requestDraw() {
+    if (drawing) { drawAgain = true; return drawing; }
+    drawing = (async () => {
+        do { drawAgain = false; await draw(); } while (drawAgain);
+    })().finally(() => { drawing = null; });
+    return drawing;
+}
+
 async function draw() {
     if (!S.m) return;
     const token = S.token;
@@ -238,8 +251,8 @@ async function draw() {
             const codes = await api.frame(S.item.id, S.field, f.layered ? S.layer : 0, S.t, "2d");
             if (token !== S.token) return;
             map.setCodes(codes);
-            // Prefetch the next record while this one is on screen.
-            if (nRecords() > 1) api.frame(S.item.id, S.field, f.layered ? S.layer : 0, (S.t + 1) % nRecords(), "2d").catch(() => {});
+            // While playing, fetch the next record while this one is on screen.
+            if (S.playing && nRecords() > 1) api.frame(S.item.id, S.field, f.layered ? S.layer : 0, (S.t + 1) % nRecords(), "2d").catch(() => {});
         }
     } catch (e) {
         console.error("draw:", e);
@@ -437,7 +450,7 @@ async function playLoop() {
         S.t = (S.t + 1) % nRecords();
         $("timeRange").value = S.t;
         updateTimeLabel();
-        await draw();
+        await requestDraw();
         if (S.section) loadSection();
         await new Promise((r) => setTimeout(r, Math.max(0, FRAME_MS - (performance.now() - started))));
     }
@@ -477,14 +490,15 @@ function wire() {
     $("layerRange").addEventListener("input", (e) => {
         S.layer = +e.target.value;
         updateLayerControls();
-        draw();
+        requestDraw();
     });
     $("timeRange").addEventListener("input", (e) => {
         S.t = +e.target.value;
         updateTimeLabel();
-        draw();
-        if (S.sectionPts) loadSection();
+        requestDraw();
     });
+    // A section samples every layer, so it follows the record once the slider is let go.
+    $("timeRange").addEventListener("change", () => { if (S.sectionPts) loadSection(); });
     $("playBtn").addEventListener("click", () => {
         if (S.playing) { setPlaying(false); return; }
         setPlaying(true);

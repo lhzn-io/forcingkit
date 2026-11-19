@@ -240,6 +240,45 @@ async def test_api_serves_a_store_in_a_subfolder(tmp_path, monkeypatch):
         assert unknown.status_code == 404
 
 
+@pytest.mark.asyncio
+async def test_api_reuses_the_store_list_between_requests(tmp_path, monkeypatch):
+    """Drawing a record must not crawl the whole cache each time; a removed store is looked up
+    again and then reported missing."""
+    import shutil
+
+    from httpx import ASGITransport, AsyncClient
+
+    from forcingkit_serve.main import app
+    from forcingkit_serve.routers import view as view_api
+    from forcingkit_serve.routers import viewer
+
+    path = fvcom_store(tmp_path)
+    monkeypatch.setenv("FORCINGKIT_CACHE_DIR", str(tmp_path))
+    view_store.clear_views()
+    view_api.forget_stores()
+    crawls = []
+    real = viewer._crawl_inventory
+
+    def counting():
+        crawls.append(1)
+        return real()
+
+    monkeypatch.setattr(view_api, "_crawl_inventory", counting)
+    sid = path.stem
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        for t in range(4):
+            r = await ac.get(f"/api/v1/cache/view/{sid}/frame?field=temp&layer=0&t={t}")
+            assert r.status_code == 200
+        assert len(crawls) == 1
+        shutil.rmtree(path)
+        gone = await ac.get(f"/api/v1/cache/view/{sid}/manifest")
+        assert gone.status_code == 404
+        assert len(crawls) == 2
+    view_api.forget_stores()
+
+
 def test_curvilinear_sigma_store_with_depths_gets_true_heights(tmp_path):
     """A Doppio-shaped volume: 2-D centers as coordinates, sigma per cell surface first, the water
     depth and a land mask."""
