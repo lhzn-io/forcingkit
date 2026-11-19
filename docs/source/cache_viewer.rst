@@ -57,8 +57,9 @@ The preview draws what the store holds and nothing more:
 - **Fixed scales.** A field's scale is set once per store from the 1st to the 99th percentile of
   its values weighted by cell area (symmetric about zero, at the 99.5th percentile of the
   magnitude, for signed fields), so a color means the same value in every record and layer.
-  Water speed uses the packaged ``currents_lis_dark`` ramp at its own speeds (0.02 to 3.1 m/s on
-  a log axis), so different stores compare directly.
+  Water speed uses the packaged ``currents_tempo_dark`` ramp at its own speeds (0.02 to 3.1 m/s on
+  a log axis), so different stores compare directly. Temperature is drawn on cmocean "thermal" and
+  salinity on "haline", the maps oceanographers know for them.
 - **True heights.** Layers run from the surface down and are labeled with their mean depth:
   fixed levels from the store's vertical coordinate, sigma layers from ``siglay`` and the water
   depth ``h``, atmosphere levels from their heights. Sigma layers in a store without ``h`` are

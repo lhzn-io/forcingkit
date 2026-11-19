@@ -39,7 +39,7 @@ from forcingkit.layered_mesh import (
     to_local,
     weighted_percentile,
 )
-from forcingkit.render import PACKAGED_RAMPS, lut_color, packaged_ramp_rows
+from forcingkit.render import PACKAGED_RAMPS, RAMPS, lut_color, packaged_ramp_rows
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ SCALE_LAYERS = 8
 VOLUME_CACHE_BYTES = 256 * 2**20
 # Water speed is drawn on the packaged currents ramp at its own speeds, so maps of different
 # stores compare directly.
-WATER_SPEED_RAMP = "currents_lis_dark"
+WATER_SPEED_RAMP = "currents_tempo_dark"
 
 _TIME_DIMS = ("time", "ocean_time", "valid_time")
 _VERTICAL_DIMS = ("z", "depth", "level", "s_rho", "siglay", "sigma", "lev")
@@ -141,13 +141,14 @@ _UNITS = {
     "m3 s-1": "m³/s",
 }
 _SYMMETRIC = {"u", "v", "w", "ww", "water_u", "water_v", "u10", "v10", "zeta"}
+# cmocean's maps for temperature and salinity (forcingkit.render.RAMPS), as the community reads them.
 _RAMPS = {
-    "temp": "plasma",
-    "temperature": "plasma",
-    "t2m": "plasma",
-    "t": "plasma",
-    "salt": "cividis",
-    "salinity": "cividis",
+    "temp": "thermal",
+    "temperature": "thermal",
+    "t2m": "thermal",
+    "t": "thermal",
+    "salt": "haline",
+    "salinity": "haline",
     "h": "cividis",
 }
 
@@ -219,6 +220,15 @@ def _ramp_rgba(meta: FieldMeta, ramp: str) -> bytes:
     if ramp in PACKAGED_RAMPS:
         color = lut_color(packaged_ramp_rows(ramp), **PACKAGED_RAMPS[ramp])
         rgba[1:] = color(meta.decode(codes[1:]))
+    elif ramp in RAMPS:
+        knots = np.array(RAMPS[ramp], dtype=float)
+        f = (codes[1:] - 1) / 254.0
+        rgba[1:, :3] = np.rint(
+            np.stack(
+                [np.interp(f, knots[:, 0], knots[:, k]) for k in (1, 2, 3)], axis=1
+            )
+        ).astype(np.uint8)
+        rgba[1:, 3] = 255
     else:
         from matplotlib import colormaps
 

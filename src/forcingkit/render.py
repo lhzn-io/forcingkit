@@ -47,6 +47,26 @@ RAMPS: dict[str, list[tuple[float, int, int, int]]] = {
         (1.00, 253, 231, 37),
     ],
     "greys": [(0.0, 240, 240, 240), (1.0, 30, 30, 30)],
+    # Seven samples each of cmocean "thermal" (temperature) and "haline" (salinity), Thyng et al. 2016
+    # (cmocean is MIT licensed): the community's maps for those variables, low to high.
+    "thermal": [
+        (0 / 6, 4, 35, 51),
+        (1 / 6, 44, 51, 149),
+        (2 / 6, 116, 73, 146),
+        (3 / 6, 177, 95, 130),
+        (4 / 6, 235, 118, 85),
+        (5 / 6, 251, 180, 61),
+        (6 / 6, 232, 250, 91),
+    ],
+    "haline": [
+        (0 / 6, 42, 24, 108),
+        (1 / 6, 20, 67, 156),
+        (2 / 6, 32, 110, 139),
+        (3 / 6, 60, 147, 135),
+        (4 / 6, 90, 185, 120),
+        (5 / 6, 170, 216, 92),
+        (6 / 6, 253, 239, 154),
+    ],
 }
 DEFAULT_RAMP = "viridis"
 DEFAULT_VMAX = 1.5  # m/s
@@ -150,6 +170,11 @@ PACKAGED_RAMPS: dict[str, dict] = {
     # falling) and "haline" (dark; rising), for a field shown alone with its legend.
     "currents_lis_deep": {"log": True, "floor": 0.02},
     "currents_lis_haline": {"log": True, "floor": 0.02},
+    # After cmocean "tempo" on the same speeds: near white through sage and teal to navy (light
+    # basemaps, lightness falling) and its reverse (dark basemaps, rising), so the pair swaps by theme.
+    # The currents ramp shared by the Long Horizon Observatory's products; "haline" stays salinity.
+    "currents_tempo": {"log": True, "floor": 0.02},
+    "currents_tempo_dark": {"log": True, "floor": 0.02},
 }
 
 

@@ -207,6 +207,9 @@ def test_ramp_has_transparent_no_value_and_one_entry_per_code(tmp_path):
     temp = next(f for f in view.manifest()["fields"] if f["name"] == "temp")
     rgba = np.frombuffer(base64.b64decode(temp["ramp_rgba"]), np.uint8).reshape(256, 4)
     assert rgba[0, 3] == 0 and np.all(rgba[1:, 3] == 255)
+    # Temperature on cmocean thermal: its first and last knots at the ends of the codes.
+    assert tuple(rgba[1, :3]) == (4, 35, 51) and tuple(rgba[255, :3]) == (232, 250, 91)
+    assert temp["ramp"] == "thermal"
 
 
 @pytest.mark.asyncio

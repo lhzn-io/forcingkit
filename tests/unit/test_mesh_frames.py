@@ -387,8 +387,44 @@ def test_multi_hue_currents_ramps_share_the_axis(name, falling):
 
 
 @pytest.mark.parametrize(
+    ("name", "falling"), [("currents_tempo", True), ("currents_tempo_dark", False)]
+)
+def test_tempo_currents_ramps_share_the_axis_and_swap_by_theme(name, falling):
+    light = np.array(render.packaged_ramp_rows("currents_lis"))
+    rows = np.array(render.packaged_ramp_rows(name))
+    np.testing.assert_array_equal(rows[:, 0], light[:, 0])
+    L = _lightness(rows[:, 1:])
+    assert np.all(np.diff(L) <= 0) if falling else np.all(np.diff(L) >= 0), (
+        "lightness must be monotone"
+    )
+    # Slack recedes into the basemap and fast water stands out on either: near white or near the dark ground.
+    assert (L[0] > 95 and L[-1] < 15) if falling else (L[0] < 15 and L[-1] > 95)
+    lab = _lab(rows[:, 1:])
+    hue = np.degrees(np.arctan2(lab[:, 2], lab[:, 1])) % 360
+    chroma = np.hypot(lab[:, 1], lab[:, 2])
+    assert not np.any((chroma > 10) & ((hue < 80) | (hue > 340))), hue
+
+
+def test_tempo_pair_mirrors():
+    light = np.array(render.packaged_ramp_rows("currents_tempo"))
+    dark = np.array(render.packaged_ramp_rows("currents_tempo_dark"))
+    np.testing.assert_array_equal(dark[:, 0], light[:, 0])
+    np.testing.assert_array_equal(
+        dark[0, 1:], light[-1, 1:]
+    )  # the dark ramp's slack is the light ramp's fastest
+    np.testing.assert_array_equal(dark[-1, 1:], light[0, 1:])
+
+
+@pytest.mark.parametrize(
     "name",
-    ["currents_lis", "currents_lis_dark", "currents_lis_deep", "currents_lis_haline"],
+    [
+        "currents_lis",
+        "currents_lis_dark",
+        "currents_lis_deep",
+        "currents_lis_haline",
+        "currents_tempo",
+        "currents_tempo_dark",
+    ],
 )
 def test_currents_ramp_floor_log_axis_and_clamp(name):
     rows = render.packaged_ramp_rows(name)

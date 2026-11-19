@@ -38,7 +38,8 @@ Colour
 
 - ``default_color``: viridis, linear over 0 to 1.5 m/s;
 - ``named_color(name, vmin, vmax, log=False, floor=None)``: a built-in ramp (``viridis``,
-  ``greys``) over a chosen range;
+  ``greys``, and cmocean's ``thermal`` for temperature and ``haline`` for salinity) over a chosen
+  range;
 - ``lut_color(rows, log=False, floor=None)``: a lookup table of ``(value, r, g, b[, a])`` rows.
   Values below the first row, or below ``floor``, take the first colour; between rows each channel
   is interpolated linearly in the value, or in log(value) when ``log`` is true; values above the
@@ -56,7 +57,13 @@ Colour
   teal and navy to deep purple) and "haline" (dark backgrounds: indigo through blue and green to
   pale yellow). They separate speeds more strongly than the single-hue pair, but they are not
   mirror images: purple is fast in one and slow in the other. Use them for a field shown alone
-  with its legend, not beside other colour-mapped layers.
+  with its legend, not beside other colour-mapped layers. Haline is cmocean's salinity map, so a
+  reader may take it for salinity;
+- ``packaged_color("currents_tempo")`` and ``packaged_color("currents_tempo_dark")``: after cmocean
+  "tempo" on the same speeds, near white at slack through teal-green to deep teal on a light
+  basemap, and the reverse on a dark one, so the pair swaps by theme alone. This is the currents
+  ramp the Long Horizon Observatory's sites and viewers share; temperature takes cmocean
+  "thermal" and salinity "haline".
 
 Python
 ------

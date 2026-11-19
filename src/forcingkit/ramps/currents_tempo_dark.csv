@@ -1,0 +1,69 @@
+# Currents speed ramp after cmocean "tempo", reversed, for a dark basemap (Thyng et al. 2016; cmocean is MIT
+# licensed): speed_m_s,r,g,b (sRGB), on the same speeds as currents_tempo, so the two swap by theme alone.
+# Interpolate in log(speed); speeds below the first row take its colour (floor 0.02 m/s) and speeds above the
+# last row (3.1 m/s) clamp to it. Navy at slack through teal and sage to near white, lightness rising with
+# speed. Colormap position is 1 minus currents_tempo's, piecewise linear in log(speed) through the same knots.
+# Knots from 2026 NOAA CO-OPS current predictions (MAX_SLACK), Long Island Sound and Block Island
+# Sound: regional median daily maximum 0.494 m/s; ACT2611 Little Gull Island median daily maximum
+# 2.418 m/s, 95th percentile 2.964 m/s, annual maximum 3.097 m/s.
+speed_m_s,r,g,b
+0.0200,21,29,68
+0.0221,21,31,69
+0.0244,22,33,70
+0.0270,22,35,71
+0.0299,23,38,72
+0.0330,23,40,74
+0.0365,24,42,75
+0.0403,24,45,76
+0.0446,25,47,77
+0.0493,25,49,79
+0.0545,26,52,80
+0.0602,26,54,81
+0.0666,26,55,83
+0.0736,27,58,84
+0.0813,27,60,86
+0.0899,27,62,87
+0.0994,28,65,88
+0.1099,28,66,90
+0.1215,28,68,91
+0.1343,28,71,93
+0.1484,28,73,94
+0.1641,28,75,95
+0.1813,28,77,97
+0.2005,28,79,98
+0.2216,28,81,99
+0.2449,28,83,100
+0.2708,27,86,102
+0.2993,27,88,103
+0.3309,27,89,104
+0.3657,26,92,106
+0.4043,26,94,107
+0.4469,25,96,108
+0.4940,25,99,109
+0.5348,23,104,112
+0.5790,20,111,115
+0.6269,18,117,118
+0.6787,17,123,121
+0.7348,18,129,123
+0.7955,22,135,124
+0.8613,30,141,126
+0.9324,41,147,127
+1.0095,52,152,128
+1.0929,65,157,130
+1.1833,80,162,132
+1.2810,91,166,134
+1.3869,105,171,137
+1.5015,116,175,141
+1.6256,129,180,145
+1.7600,139,184,150
+1.9054,151,189,156
+2.0629,161,193,161
+2.2334,172,198,169
+2.4180,182,203,175
+2.5198,195,209,186
+2.6259,207,216,196
+2.7365,220,223,208
+2.8518,231,230,219
+2.9719,244,238,232
+3.0970,255,246,244
+3.1000,255,246,244
