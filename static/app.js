@@ -89,8 +89,13 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // - Initial load, deep link and polling -
+    // The list is polled for new stores: every POLL_MS after the previous poll returns, not while
+    // the tab is hidden, and with the last ETag, so an unchanged list costs no download.
+    const POLL_MS = 5000;
     let inventoryFingerprint = "";
+    let inventoryEtag = null;
     let pollPaused = false;
+    let pollTimer = null;
     const fingerprint = (items) => items.map(i => `${i.id}:${i.modified_time}:${i.size_mb}`).join("|");
 
     fetchInventory().then(() => {
@@ -98,23 +103,38 @@ document.addEventListener("DOMContentLoaded", () => {
             const { id, want } = window.fkPreview.parseHash(window.location.hash);
             if (id && currentInventory.some(item => item.id === id)) selectById(id, want);
         }
-        setInterval(pollInventory, 2000);
+        schedulePoll();
+    });
+
+    function schedulePoll(ms = POLL_MS) {
+        clearTimeout(pollTimer);
+        pollTimer = setTimeout(pollInventory, ms);
+    }
+
+    document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) schedulePoll(0);
     });
 
     async function pollInventory() {
-        if (pollPaused) return;
-        try {
-            const resp = await fetch("/api/v1/cache/inventory", { cache: "no-store" });
-            if (!resp.ok) return;
-            const items = await resp.json();
-            const fp = fingerprint(items);
-            if (fp === inventoryFingerprint) return;
-            inventoryFingerprint = fp;
-            currentInventory = items;
-            renderInventory(items);
-        } catch (_) {
-            // A missed poll is retried two seconds later.
+        if (document.hidden) return; // resumed by visibilitychange
+        if (!pollPaused) {
+            try {
+                const headers = inventoryEtag ? { "If-None-Match": inventoryEtag } : {};
+                const resp = await fetch("/api/v1/cache/inventory", { cache: "no-store", headers });
+                if (resp.ok) {
+                    inventoryEtag = resp.headers.get("ETag");
+                    const items = await resp.json();
+                    const fp = fingerprint(items);
+                    if (fp !== inventoryFingerprint) {
+                        inventoryFingerprint = fp;
+                        currentInventory = items;
+                        renderInventory(items);
+                    }
+                }
+                // 304: unchanged. Other errors: a missed poll is retried at the next one.
+            } catch (_) { /* retried at the next poll */ }
         }
+        schedulePoll();
     }
 
     if (purgeBtn) {
@@ -189,6 +209,7 @@ document.addEventListener("DOMContentLoaded", () => {
         try {
             const resp = await fetch("/api/v1/cache/inventory", { cache: "no-store" });
             if (!resp.ok) throw new Error(`HTTP Error: ${resp.status}`);
+            inventoryEtag = resp.headers.get("ETag");
             currentInventory = await resp.json();
             inventoryFingerprint = fingerprint(currentInventory);
             renderInventory(currentInventory);

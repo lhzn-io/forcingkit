@@ -1,5 +1,9 @@
+import hashlib
+import json
+import os
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, Response as FastAPIResponse
+from fastapi import APIRouter, HTTPException, Request, Response as FastAPIResponse
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
 from typing import List
 import logging
@@ -386,12 +390,43 @@ def _zarr_key(path: Path) -> tuple:
 
 
 @router.get("/inventory", response_model=List[CacheItem])
-async def get_cache_inventory(response: FastAPIResponse):
-    """Crawls the local data cache and returns an inventory of all processed forcing datasets."""
+async def get_cache_inventory(request: Request):
+    """Crawls the local data cache and returns an inventory of all processed forcing datasets.
+
+    The response carries an ETag; a request whose ``If-None-Match`` matches gets 304 and no
+    body, so a page polling for changes downloads the list only when it changed."""
     from starlette.concurrency import run_in_threadpool
 
-    response.headers["Cache-Control"] = "no-store"
-    return await run_in_threadpool(_crawl_inventory)
+    items = await run_in_threadpool(_crawl_inventory)
+    body = json.dumps(
+        jsonable_encoder(items), separators=(",", ":"), ensure_ascii=False
+    ).encode()
+    etag = '"' + hashlib.sha256(body).hexdigest()[:32] + '"'
+    headers = {"Cache-Control": "no-cache", "ETag": etag}
+    if request.headers.get("if-none-match") == etag:
+        return FastAPIResponse(status_code=304, headers=headers)
+    return FastAPIResponse(body, media_type="application/json", headers=headers)
+
+
+def _cache_entries(cache_dir: Path) -> tuple[list[Path], dict[str, list[Path]]]:
+    """The cache's Zarr store directories and its raw donor files (by suffix), in one walk
+    that does not descend into a store: a store holds thousands of chunk files, and listing
+    them on every poll was most of the crawl's time."""
+    zarr_dirs: list[Path] = []
+    files: dict[str, list[Path]] = {".grib": [], ".grib2": [], ".nc": []}
+    for root, dirs, names in os.walk(cache_dir):
+        keep = []
+        for d in sorted(dirs):
+            if d.endswith(".zarr"):
+                zarr_dirs.append(Path(root) / d)
+            else:
+                keep.append(d)
+        dirs[:] = keep
+        for n in sorted(names):
+            suffix = os.path.splitext(n)[1]
+            if suffix in files:
+                files[suffix].append(Path(root) / n)
+    return zarr_dirs, files
 
 
 def _crawl_inventory() -> list[CacheItem]:
@@ -400,10 +435,11 @@ def _crawl_inventory() -> list[CacheItem]:
         return []
 
     inventory = []
+    zarr_dirs, donor_files = _cache_entries(cache_dir)
 
     # 1. Find Zarr datasets (directories)
     seen: set[str] = set()
-    for zarr_path in cache_dir.rglob("*.zarr"):
+    for zarr_path in zarr_dirs:
         if zarr_path.is_dir():
             seen.add(str(zarr_path))
             try:
@@ -431,8 +467,8 @@ def _crawl_inventory() -> list[CacheItem]:
             _INVENTORY_CACHE[str(zarr_path)] = (ckey, inventory[-1])
 
     # 2. Find GRIB/NC datasets (files)
-    for ext_glob in ["*.grib", "*.grib2", "*.nc"]:
-        for file_path in cache_dir.rglob(ext_glob):
+    for suffix in (".grib", ".grib2", ".nc"):
+        for file_path in donor_files.get(suffix, []):
             if file_path.is_file():
                 seen.add(str(file_path))
                 st = file_path.stat()

@@ -3,8 +3,9 @@ Cache viewer
 
 The service serves a page at ``/ui/`` that lists every store in ``FORCINGKIT_CACHE_DIR``: the
 Zarr stores it built and the raw GRIB and NetCDF files it fetched. The page polls
-``/api/v1/cache/inventory`` every two seconds, so new stores appear while a request is still
-running.
+``/api/v1/cache/inventory`` every five seconds while it is visible, so new stores appear while a
+request is still running. The response carries an ETag, and a poll that sends it back in
+``If-None-Match`` gets 304 with no body when nothing changed.
 
 Coverage
 --------

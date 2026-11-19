@@ -88,3 +88,38 @@ async def test_inventory_route_returns_the_structured_fields(tmp_path, monkeypat
     assert item["bbox"] == [-69.9, 39.7, -69.75, 39.82]
     assert item["time_end"] == "2022-08-11T02:00:00Z"
     assert (item["family"], item["kind"]) == ("Doppio", "ocean volume")
+
+
+@pytest.mark.asyncio
+async def test_inventory_etag_answers_304_until_the_cache_changes(
+    tmp_path, monkeypatch
+):
+    """A poll that sends back the ETag downloads nothing while the list is unchanged, and the
+    full list again once a store appears (here in a subfolder)."""
+    monkeypatch.setenv("FORCINGKIT_CACHE_DIR", str(tmp_path))
+
+    def store(path: Path) -> None:
+        xr.Dataset({"temp": (("time",), np.zeros(3))}, coords={"time": TIMES}).to_zarr(
+            path
+        )
+
+    store(tmp_path / "obc_000000000001.zarr")
+    from forcingkit_serve.main import app
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        first = await ac.get("/api/v1/cache/inventory")
+        etag = first.headers["etag"]
+        assert [i["id"] for i in first.json()] == ["obc_000000000001"]
+        same = await ac.get("/api/v1/cache/inventory", headers={"If-None-Match": etag})
+        assert same.status_code == 304 and same.content == b""
+        store(tmp_path / "sub" / "obc_000000000002.zarr")
+        changed = await ac.get(
+            "/api/v1/cache/inventory", headers={"If-None-Match": etag}
+        )
+        assert changed.status_code == 200 and changed.headers["etag"] != etag
+        assert sorted(i["id"] for i in changed.json()) == [
+            "obc_000000000001",
+            "obc_000000000002",
+        ]
