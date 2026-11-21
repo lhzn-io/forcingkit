@@ -475,3 +475,77 @@ def test_volume_passes_a_selection_to_each_file_and_caches_it_apart(archive):
             reader=selecting,
             variables=["speed"],
         )
+
+
+def zeroed_coordinates(ds: xr.Dataset) -> xr.Dataset:
+    """The file as SMAST served it on 2026-11-20: x, y and nv right, longitudes and latitudes all zero."""
+    return ds.assign({k: ds[k] * 0 for k in ("lon", "lat", "lonc", "latc")})
+
+
+@pytest.fixture
+def mesh_cache(monkeypatch, tmp_path):
+    monkeypatch.setenv("FORCINGKIT_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(necofs, "_MESHES", {})
+    return tmp_path
+
+
+def test_zeroed_coordinates_are_taken_from_a_cached_mesh_with_the_same_planar_mesh(
+    mesh_cache, monkeypatch, caplog
+):
+    good = fvcom_file(day_file_times("2026-04-02"))
+    necofs._whole_mesh(good, "https://example.org/a.nc")
+    necofs._MESHES.clear()
+    monkeypatch.setattr(
+        necofs, "_open_dap", lambda url: pytest.fail("the reference is not needed")
+    )
+    mesh = necofs._whole_mesh(zeroed_coordinates(good), "https://example.org/b.nc")
+    for k in ("lon", "lat", "lonc", "latc"):
+        np.testing.assert_array_equal(mesh[k], good[k].values)
+    assert "no usable longitudes" in caplog.text
+    # the repaired mesh is cached under the broken file's own key
+    necofs._MESHES.clear()
+    again = necofs._whole_mesh(zeroed_coordinates(good), "https://example.org/b.nc")
+    np.testing.assert_array_equal(again["lonc"], good["lonc"].values)
+
+
+def test_without_a_cached_match_the_reference_file_supplies_them(
+    mesh_cache, monkeypatch
+):
+    good = fvcom_file(day_file_times("2026-04-02"))
+    opened = []
+    monkeypatch.setattr(necofs, "_open_dap", lambda url: opened.append(url) or good)
+    mesh = necofs._whole_mesh(zeroed_coordinates(good), "https://example.org/b.nc")
+    assert opened == [necofs.MESH_REFERENCE_URL]
+    np.testing.assert_array_equal(mesh["lat"], good["lat"].values)
+    box = necofs._subset_volume(
+        zeroed_coordinates(good),
+        day_file_times("2026-04-02"),
+        INNER,
+        day_file_times("2026-04-02")[:2],
+        "https://example.org/b.nc",
+    )
+    assert box.sizes["element"] > 0
+
+
+def test_a_different_planar_mesh_is_no_donor_and_none_raises(mesh_cache, monkeypatch):
+    good = fvcom_file(day_file_times("2026-04-02"))
+    moved = good.assign(x=good["x"] + 1.0)
+    # cached and usable, but not the same mesh
+    necofs._whole_mesh(moved, "https://example.org/a.nc")
+    necofs._MESHES.clear()
+
+    def unreachable(url):
+        raise OSError("server down")
+
+    monkeypatch.setattr(necofs, "_open_dap", unreachable)
+    with pytest.raises(ValueError, match="no usable longitudes"):
+        necofs._whole_mesh(zeroed_coordinates(good), "https://example.org/b.nc")
+
+
+def test_a_usable_mesh_is_left_alone(mesh_cache, monkeypatch):
+    good = fvcom_file(day_file_times("2026-04-02"))
+    monkeypatch.setattr(
+        necofs, "_open_dap", lambda url: pytest.fail("no fallback for a usable mesh")
+    )
+    mesh = necofs._whole_mesh(good, "https://example.org/a.nc")
+    np.testing.assert_array_equal(mesh["lon"], good["lon"].values)

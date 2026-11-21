@@ -765,6 +765,85 @@ def _derive_mesh(arrays: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     return {**arrays, "nbe_all": nbe_all, "boundary_nodes": boundary_nodes}
 
 
+# SMAST's files have at times carried all-zero longitudes and latitudes while x, y and nv were right: the rolling
+# forecast on 2026-11-20 and 21, and earlier a monthly archive file. Such a mesh selects no elements in any box. A mesh
+# whose geographic coordinates are unusable takes them from a mesh with the same x, y, xc, yc and nv: one already in the
+# cache, else MESH_REFERENCE_URL, a published monthly archive file on the GOM7 mesh, read once (about 14 MB).
+MESH_REFERENCE_URL = f"{NECOFS_GOM_ARCHIVE_BASE}/2025/necofs_202512.nc"
+_GEOGRAPHIC = ("lon", "lat", "lonc", "latc")
+_PLANAR = ("x", "y", "xc", "yc", "nv")
+
+
+def _geographic_ok(mesh: dict[str, np.ndarray]) -> bool:
+    """Whether lon, lat, lonc and latc are finite, in range and not all one value."""
+    for name, limit in (("lon", 180.0), ("lat", 90.0), ("lonc", 180.0), ("latc", 90.0)):
+        v = np.asarray(mesh[name], dtype=np.float64)
+        if (
+            v.size == 0
+            or not np.isfinite(v).all()
+            or np.abs(v).max() > limit
+            or np.ptp(v) == 0
+        ):
+            return False
+    return True
+
+
+def _same_planar(a: dict[str, np.ndarray], b: dict[str, np.ndarray]) -> bool:
+    return all(
+        np.asarray(a[k]).shape == np.asarray(b[k]).shape and np.array_equal(a[k], b[k])
+        for k in _PLANAR
+    )
+
+
+def _geographic_donor(
+    mesh: dict[str, np.ndarray], url: str, cache: Path
+) -> tuple[dict[str, np.ndarray], str] | None:
+    """(arrays, source) of a mesh with usable lon/lat and the same planar mesh as `mesh`, or None."""
+    if cache.is_dir():
+        for path in sorted(cache.glob("*.npz")):
+            if path.name.startswith("."):
+                continue  # another process's entry being written
+            try:
+                with np.load(path) as z:
+                    donor = {k: z[k] for k in _GEOGRAPHIC + _PLANAR}
+            except Exception:
+                continue
+            if _geographic_ok(donor) and _same_planar(mesh, donor):
+                return donor, f"the cached mesh {path.name}"
+    if url == MESH_REFERENCE_URL:
+        return None
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            ref = _open_dap(MESH_REFERENCE_URL)
+        donor = {k: np.asarray(ref[k].values) for k in _GEOGRAPHIC + _PLANAR}
+    except Exception as exc:
+        logger.warning(f"NECOFS mesh reference {MESH_REFERENCE_URL} not read ({exc})")
+        return None
+    if _geographic_ok(donor) and _same_planar(mesh, donor):
+        return donor, MESH_REFERENCE_URL
+    return None
+
+
+def _usable_geographic(
+    mesh: dict[str, np.ndarray], url: str, cache: Path
+) -> dict[str, np.ndarray]:
+    """`mesh` itself when its lon/lat are usable; else with lon, lat, lonc and latc from a mesh with the same x, y,
+    xc, yc and nv (_geographic_donor). Raises when there is none, rather than letting a box select nothing."""
+    if _geographic_ok(mesh):
+        return mesh
+    found = _geographic_donor(mesh, url, cache)
+    if found is None:
+        raise ValueError(
+            f"NECOFS file {url} has no usable longitudes and latitudes, and no mesh with the same x, y and nv was found"
+        )
+    donor, source = found
+    logger.warning(
+        f"NECOFS file {url} has no usable longitudes and latitudes; taking them from {source}, which has the same x, y and nv"
+    )
+    return {**mesh, **{k: np.asarray(donor[k]) for k in _GEOGRAPHIC}}
+
+
 def _whole_mesh(ds: xr.Dataset, url: str) -> dict[str, np.ndarray]:
     """The file's MESH_VARIABLES as stored, with `nbe_all` and `boundary_nodes`; for a remote file from the cache when
     its mesh has been read before. Safe from several threads or processes: an entry is written under a temporary name
@@ -776,13 +855,16 @@ def _whole_mesh(ds: xr.Dataset, url: str) -> dict[str, np.ndarray]:
         )
 
     if not str(url).startswith(("http://", "https://")):
-        return read()
+        return _usable_geographic(
+            read(), url, Path(settings.cache_dir("necofs", "mesh"))
+        )
     family, key = _mesh_key(ds, url)
     with _MESH_LOCK:
         if key in _MESHES:
             return _MESHES[key]
     path = Path(settings.cache_dir("necofs", "mesh", f"{key}.npz"))
     mesh = None
+    store = False  # write the entry: read afresh, or a cached entry given usable coordinates
     if path.is_file():
         try:
             with np.load(path) as z:
@@ -802,6 +884,11 @@ def _whole_mesh(ds: xr.Dataset, url: str) -> dict[str, np.ndarray]:
                 f"NECOFS {family} mesh differs from the cached {others}; reading the new mesh from {url}"
             )
         mesh = read()
+        store = True
+    repaired = _usable_geographic(mesh, url, path.parent)
+    store = store or repaired is not mesh
+    mesh = repaired
+    if store:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(
             f".{path.stem}.{os.getpid()}.{threading.get_ident()}.tmp.npz"
