@@ -17,14 +17,26 @@ BBOX = {"min_lon": -70.9, "min_lat": 41.3, "max_lon": -70.6, "max_lat": 41.6}
 OBC = {"bbox": BBOX, "start_date": "2026-06-01T00:00:00", "duration_hours": 6}
 
 
+NECOFS_FIELDS = ("u", "v", "w", "temp", "salt", "zeta")
+
+
 def _write_store(
-    path: str, complete: bool = True, source: str = "forcingkit.fetchers.necofs"
+    path: str,
+    complete: bool = True,
+    source: str = "forcingkit.fetchers.necofs",
+    fields: tuple[str, ...] = NECOFS_FIELDS,
 ):
     lon = np.linspace(-70.95, -70.55, 5)
     lat = np.linspace(41.25, 41.65, 4)
     time_ = pd.date_range("2026-06-01", periods=7, freq="1h")
     ds = xr.Dataset(
-        {"u": (("time", "z", "lat", "lon"), np.zeros((7, 2, 4, 5), dtype=np.float32))},
+        {
+            name: (
+                ("time", "z", "lat", "lon"),
+                np.zeros((7, 2, 4, 5), dtype=np.float32),
+            )
+            for name in fields
+        },
         coords={"time": time_, "z": [-3.0, -1.0], "lat": lat, "lon": lon},
         attrs={"schema": "z-v3", "complete": complete, "source": source},
     )
@@ -112,6 +124,23 @@ def test_complete_store_succeeds_without_a_build(client, tmp_path, monkeypatch):
     body = client.post("/api/v1/jobs/obc", json=OBC).json()
     assert body["job_id"] == zarr_id and body["status"] == "succeeded"
     assert body["result"]["properties"]["forcingkit:store_version"]
+
+
+def test_cached_necofs_store_without_w_is_rebuilt(client, monkeypatch):
+    calls = []
+
+    def fake_dispatch(**kwargs):
+        calls.append(kwargs)
+        _write_store(kwargs["zarr_path"])
+        return kwargs["zarr_path"]
+
+    monkeypatch.setattr(dispatcher, "dispatch_obc_request", fake_dispatch)
+    zarr_id, zarr_path, _ = main._obc_store(main.OBCRequest(**OBC))
+    _write_store(zarr_path, fields=("u", "v", "temp", "salt", "zeta"))
+    body = client.post("/api/v1/jobs/obc", json=OBC).json()
+    assert body["job_id"] == zarr_id
+    assert _wait(client, body["status_url"])["status"] == "succeeded"
+    assert len(calls) == 1
 
 
 def test_failed_job_reports_error_and_retries(client, monkeypatch):

@@ -761,12 +761,15 @@ def _submit(
     cache_bust: bool,
     build: Callable[[], Dict[str, Any]],
     cached: Callable[[], Dict[str, Any]],
+    is_complete: Callable[[str], bool] | None = None,
 ) -> JSONResponse:
+    """Queue `build`, or answer from the cache when the store at `zarr_path` is complete
+    (`is_complete`, default `store_complete`)."""
     from forcingkit_serve.jobs import registry
     from forcingkit_serve.routers.stores import store_complete
 
     kind = JOB_KINDS[zarr_id.split("_", 1)[0]]
-    complete = store_complete(zarr_path)
+    complete = (is_complete or store_complete)(zarr_path)
     if not cache_bust and not registry.is_active(zarr_id) and complete:
         job = registry.finished(zarr_id, kind, cached())
     else:
@@ -779,8 +782,10 @@ def _submit(
 @app.post("/api/v1/jobs/obc", status_code=202)
 def submit_obc_job(request: OBCRequest, http: Request) -> JSONResponse:
     """Queue the parent-ocean build that /api/v1/obc runs; poll `status_url` for the result, a
-    STAC Item whose `zarr` asset is the store served over HTTP."""
-    from forcingkit.dispatcher import delivered_obc_donor
+    STAC Item whose `zarr` asset is the store served over HTTP. A cached store that lacks a
+    field its donor now writes is rebuilt, as in `_build_obc`."""
+    from forcingkit.dispatcher import delivered_obc_donor, parent_store_is_current
+    from forcingkit.fetchers.necofs import OBC_SCHEMA
 
     zarr_id, zarr_path, donor_id = _obc_store(request)
     return _submit(
@@ -793,6 +798,7 @@ def submit_obc_job(request: OBCRequest, http: Request) -> JSONResponse:
             "zarr_path": zarr_path,
             "donor": delivered_obc_donor(zarr_path) or donor_id,
         },
+        lambda path: parent_store_is_current(path, OBC_SCHEMA),
     )
 
 
