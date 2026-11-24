@@ -1228,6 +1228,25 @@ def volume_cache_key(
     return "necofs_volume_" + hashlib.sha256(key.encode()).hexdigest()[:12]
 
 
+def _plain_attrs(ds: xr.Dataset) -> xr.Dataset:
+    """`ds` with numpy scalars and arrays in its own and its variables' attrs made plain Python
+    values (in place), which zarr can write as JSON. A caller's numpy-float bbox, for example,
+    reaches `requested_bbox` as float32."""
+
+    def plain(value):
+        if isinstance(value, np.generic | np.ndarray):
+            return value.tolist()
+        if isinstance(value, list | tuple):
+            return [plain(v) for v in value]
+        if isinstance(value, dict):
+            return {k: plain(v) for k, v in value.items()}
+        return value
+
+    for attrs in [ds.attrs, *(v.attrs for v in ds.variables.values())]:
+        attrs.update({k: plain(v) for k, v in attrs.items()})
+    return ds
+
+
 def volume(
     bbox: list[float] | None,
     start: str | pd.Timestamp,
@@ -1328,7 +1347,7 @@ def volume(
         tmp = path + ".partial"
         shutil.rmtree(tmp, ignore_errors=True)
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        out.to_zarr(tmp, mode="w", consolidated=True, zarr_format=2)
+        _plain_attrs(out).to_zarr(tmp, mode="w", consolidated=True, zarr_format=2)
         os.replace(tmp, path)
         logger.info(f"NECOFS volume cached at {path}")
     return out

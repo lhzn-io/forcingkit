@@ -304,6 +304,26 @@ def test_the_cache_returns_the_same_volume_without_reading_again(archive):
     assert second.attrs["schema"] == necofs.VOLUME_SCHEMA
 
 
+def test_numpy_scalar_attrs_round_trip_through_the_cache(archive):
+    reader, reads = archive
+
+    def tagged(*args, **kwargs):
+        ds = reader(*args, **kwargs)
+        ds["u"].attrs["valid_max"] = np.float32(2.5)
+        ds["element_id"].attrs["first"] = np.int64(7)
+        return ds
+
+    bbox = list(np.asarray(INNER, dtype=np.float32))  # a box taken from numpy arrays
+    first = necofs.volume(bbox, "2026-04-02T05", "2026-04-02T08", reader=tagged)
+    n_reads = len(reads)
+    second = necofs.volume(bbox, "2026-04-02T05", "2026-04-02T08", reader=tagged)
+    assert len(reads) == n_reads
+    assert second.attrs["requested_bbox"] == pytest.approx(INNER, abs=1e-6)
+    assert second["u"].attrs["valid_max"] == 2.5
+    assert second["element_id"].attrs["first"] == 7
+    xr.testing.assert_identical(first, second)
+
+
 def test_the_cache_key_depends_on_box_window_and_schema():
     t0, t1 = pd.Timestamp("2026-04-02"), pd.Timestamp("2026-04-03")
     key = necofs.volume_cache_key(INNER, t0, t1)
