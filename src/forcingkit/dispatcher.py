@@ -140,6 +140,33 @@ def delivered_obc_donor(zarr_path: str) -> Optional[str]:
     return source.rsplit(".", 1)[-1]
 
 
+def parent_store_is_current(zarr_path: str, schema: str) -> bool:
+    """True when the parent store at `zarr_path` is complete under `schema` and holds every record
+    field its donor now writes. A store cached before a donor gained a field (NECOFS ``w``, added
+    within ``z-v3``) is rebuilt on its next request, while other donors' stores stay valid."""
+    import importlib
+
+    import zarr
+
+    from forcingkit.zarr_stream import store_is_complete
+
+    if not store_is_complete(zarr_path, (schema,)):
+        return False
+    try:
+        group = zarr.open_group(zarr_path, mode="r", zarr_format=2)
+        source = group.attrs.get("source")
+        held = set(group.array_keys())
+    except Exception:
+        return False
+    if not isinstance(source, str) or not source.startswith("forcingkit.fetchers."):
+        return True
+    try:
+        fields = getattr(importlib.import_module(source), "PARENT_RECORD_DIMS", {})
+    except ImportError:
+        return True
+    return set(fields) <= held
+
+
 def dispatch_obc_request(
     start_date: str,
     duration_hours: int,
@@ -194,9 +221,7 @@ def dispatch_obc_request(
             except Exception:
                 pass
 
-    from forcingkit.zarr_stream import store_is_complete
-
-    if not cache_bust and store_is_complete(zarr_path, (OBC_SCHEMA,)):
+    if not cache_bust and parent_store_is_current(zarr_path, OBC_SCHEMA):
         logger.info(f"Cache hit for OBC: {zarr_path}")
         return zarr_path
 

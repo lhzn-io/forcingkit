@@ -290,7 +290,8 @@ class Client(_Base):
         **options: Any,
     ) -> xr.Dataset:
         """The parent ocean over `bbox` for `hours` from `start`: `u, v` (m/s), `temp` (deg C),
-        `salt`, `zeta` (m) on `(time, z, lat, lon)`, z in metres positive up. Further `options`
+        `salt`, `zeta` (m) on `(time, z, lat, lon)`, z in metres positive up, plus `w` (m/s,
+        upward) from donors that provide it (NECOFS). Further `options`
         (`include_tides`, `allow_donor_fallback`, `cache_bust`, ...) pass through to the service."""
         payload = _ocean_request(
             bbox, start, hours, vertical_spacing_m, pad_cells, sponge_cells, **options

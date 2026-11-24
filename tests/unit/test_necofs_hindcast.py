@@ -129,6 +129,10 @@ def _fvcom(times: pd.DatetimeIndex, n: int = 5, nsig: int = 3) -> xr.Dataset:
                 ("time", "siglay", "nele"),
                 np.full((nt, nsig, n_ele), -0.1, np.float32),
             ),
+            "ww": (
+                ("time", "siglay", "nele"),
+                np.full((nt, nsig, n_ele), 0.002, np.float32),
+            ),
             "temp": (
                 ("time", "siglay", "node"),
                 np.full((nt, nsig, n_node), 20.0, np.float32),
@@ -175,6 +179,16 @@ def test_parent_from_a_monthly_hindcast(monkeypatch):
     u = records[0][2]["u"]
     assert np.nanmean(u) == pytest.approx(0.3, abs=1e-6)
     assert np.nanmean(records[-1][2]["v"]) == pytest.approx(-0.1, abs=1e-6)
+    assert np.nanmean(records[0][2]["w"]) == pytest.approx(0.002, abs=1e-6)
+
+
+def test_parent_w_is_nan_when_the_file_has_no_ww(monkeypatch):
+    month = f"{BASE}/necofs_2022/NECOFS_202208.nc"
+    _serve(monkeypatch, {month: _fvcom(_month_times("2022-08-01")).drop_vars("ww")})
+    items = list(necofs.iter_parent("2022-08-13T01:00", 1, BBOX, pad_cells=1))
+    record = items[1][2]
+    assert np.isnan(record["w"]).all()
+    assert np.isfinite(record["u"]).any()
 
 
 def test_parent_window_across_months(monkeypatch):

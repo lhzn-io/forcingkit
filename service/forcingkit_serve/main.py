@@ -451,13 +451,16 @@ def _obc_store(request: OBCRequest) -> tuple[str, str, str]:
 def _build_obc(request: OBCRequest) -> Dict[str, Any]:
     """Build (or find cached) the parent store for `request`; raises on failure. Shared by the
     synchronous route and the job queue."""
-    from forcingkit.dispatcher import delivered_obc_donor, dispatch_obc_request
+    from forcingkit.dispatcher import (
+        delivered_obc_donor,
+        dispatch_obc_request,
+        parent_store_is_current,
+    )
     from forcingkit.fetchers.necofs import OBC_SCHEMA
-    from forcingkit.zarr_stream import store_is_complete
 
     zarr_id, zarr_path, donor_id = _obc_store(request)
     status = "cached"
-    if request.cache_bust or not store_is_complete(zarr_path, (OBC_SCHEMA,)):
+    if request.cache_bust or not parent_store_is_current(zarr_path, OBC_SCHEMA):
         zarr_path = dispatch_obc_request(
             start_date=request.start_date,
             duration_hours=request.duration_hours,

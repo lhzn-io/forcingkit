@@ -39,3 +39,37 @@ def test_dispatch_station_profiles_request_wlis(mocker):
         cache_bust=False,
         skipped=None,
     )
+
+
+def _parent_store(path, source, fields, complete=True):
+    import numpy as np
+    import zarr
+
+    group = zarr.open_group(str(path), mode="w", zarr_format=2)
+    for name in fields:
+        group.create_array(name, data=np.zeros((1, 2, 2), np.float32))
+    group.attrs.update(schema="z-v3", complete=complete, source=source)
+    return str(path)
+
+
+def test_a_necofs_parent_store_without_w_is_rebuilt(tmp_path):
+    from forcingkit.dispatcher import parent_store_is_current
+
+    necofs = "forcingkit.fetchers.necofs"
+    old = ("u", "v", "temp", "salt", "zeta")
+    assert not parent_store_is_current(
+        _parent_store(tmp_path / "a", necofs, old), "z-v3"
+    )
+    assert parent_store_is_current(
+        _parent_store(tmp_path / "b", necofs, old + ("w",)), "z-v3"
+    )
+    assert not parent_store_is_current(
+        _parent_store(tmp_path / "c", necofs, old + ("w",), complete=False), "z-v3"
+    )
+
+
+def test_a_parent_store_from_an_unknown_source_is_kept(tmp_path):
+    from forcingkit.dispatcher import parent_store_is_current
+
+    path = _parent_store(tmp_path / "a", "somewhere.else", ("u", "v"))
+    assert parent_store_is_current(path, "z-v3")

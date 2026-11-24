@@ -149,7 +149,7 @@ vertical_spacing_m=2.0)`` is a generator; the dispatcher writes what it yields s
    interpolates within an element. A target inside no element (land, or outside the mesh) is NaN.
    This matters along the coast: a plain Delaunay triangulation of the nodes would also span the
    land between them (a peninsula, an island, the shore between two estuaries) and fill it with
-   values blended across it. Element fields (``u``, ``v``) are interpolated linearly over a
+   values blended across it. Element fields (``u``, ``v``, ``ww``) are interpolated linearly over a
    triangulation of the element centroids, then masked to the same wet points.
 4. **Vertical coordinate.** Each hour, every column's layer depths are computed from the free
    surface: :math:`z = \sigma (h + \zeta) + \zeta`. Fields are interpolated linearly onto fixed
@@ -178,6 +178,12 @@ Output: the ``z-v3`` parent store
      - (time, z, lat, lon)
      - m s-1
      - Eastward and northward velocity.
+   * - ``w``
+     - (time, z, lat, lon)
+     - m s-1
+     - Upward velocity in z (FVCOM's ``ww``, not the sigma velocity omega). NaN where the file
+       has no ``ww``. Added within ``z-v3``: a NECOFS store cached before it is rebuilt on its
+       next request; other donors write no ``w``.
    * - ``temp``
      - (time, z, lat, lon)
      - degree_Celsius
@@ -267,7 +273,7 @@ From Python, either stream records yourself or assemble them in memory:
        if item[0] == "static":
            static = item[1]              # lon, lat, z, z_face, h, mask, attrs
        else:
-           _, t, record = item           # record: u, v, temp, salt, zeta as numpy arrays
+           _, t, record = item           # record: u, v, w, temp, salt, zeta as numpy arrays
 
    ds = fetch_necofs_boundary_conditions("2026-09-26T00:00:00Z", 24, bbox)
 

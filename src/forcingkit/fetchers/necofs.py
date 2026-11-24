@@ -307,6 +307,7 @@ class MeshBarycentric(Barycentric):
 PARENT_RECORD_DIMS = {
     "u": ("z", "lat", "lon"),
     "v": ("z", "lat", "lon"),
+    "w": ("z", "lat", "lon"),
     "temp": ("z", "lat", "lon"),
     "salt": ("z", "lat", "lon"),
     "zeta": ("lat", "lon"),
@@ -315,6 +316,7 @@ PARENT_RECORD_DIMS = {
 PARENT_UNITS = {
     "u": ("m s-1", "eastward_sea_water_velocity"),
     "v": ("m s-1", "northward_sea_water_velocity"),
+    "w": ("m s-1", "upward_sea_water_velocity"),
     "temp": ("degree_Celsius", "sea_water_temperature"),
     "salt": ("1e-3", "sea_water_practical_salinity"),
     "zeta": ("m", "sea_surface_height_above_geoid"),
@@ -358,15 +360,16 @@ def iter_parent(
     """NECOFS GOM7 as a parent ocean, one hourly record at a time.
 
     Yields `("static", Dataset)` once (lon, lat, z, z_face, h, mask and the store attributes),
-    then `("record", time, {u, v, temp, salt, zeta})` for each of `duration_hours` hours starting
-    at `start_date`, in order. u, v, temp and salt are (z, lat, lon) and zeta (lat, lon) on a
+    then `("record", time, {u, v, w, temp, salt, zeta})` for each of `duration_hours` hours
+    starting at `start_date`, in order. u, v, w, temp and salt are (z, lat, lon) and zeta (lat, lon) on a
     regular 0.002 degree grid covering `bbox` plus `pad_cells` donor cells on every side, so the
     parent brackets the child. The vertical axis is true depth: each FVCOM sigma layer is placed at
     z = siglay * (h + zeta) + zeta for its column and interpolated onto fixed levels every
     `vertical_spacing_m` metres, ordered bottom to top. Land, points outside the mesh and levels
     below the sea floor are NaN. Land is what lies inside no element of the NECOFS mesh: node
-    fields are interpolated within the containing element, and element fields (u, v) are NaN
-    wherever the node mesh is.
+    fields are interpolated within the containing element, and element fields (u, v, w) are NaN
+    wherever the node mesh is. w is FVCOM's ``ww``, the upward velocity in z (not the sigma
+    velocity omega); a file without ``ww`` gives NaN w.
 
     Raises rather than returning a short record: an unreachable archive file, a missing hour or a
     failed interpolation ends the delivery with an error.
@@ -473,9 +476,13 @@ def iter_parent(
             zeta_t = at_node(snap["zeta"].values)
             z_bottom = np.where(np.isfinite(zeta_t), -h_grid, np.nan)
             z_layers = siglay_grid * (h_grid + zeta_t)[None] + zeta_t[None]
+            u = at_elem(snap["u"].values)
             fields = {
-                "u": at_elem(snap["u"].values),
+                "u": u,
                 "v": at_elem(snap["v"].values),
+                "w": at_elem(snap["ww"].values)
+                if "ww" in snap
+                else np.full_like(u, np.nan),
                 "temp": at_node(snap["temp"].values),
                 "salt": at_node(snap["salinity"].values),
             }
