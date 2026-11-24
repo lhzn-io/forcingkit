@@ -11,7 +11,7 @@ from forcingkit_client import Client
 
 fk = Client("http://localhost:9598")
 box = (-70.9, 41.3, -70.6, 41.6)  # west, south, east, north
-ocean = fk.ocean(box, "2025-07-01", 24)  # u, v, temp, salt, zeta
+ocean = fk.ocean(box, "2025-07-01", 24)  # u, v, temp, salt, zeta; w from NECOFS
 air = fk.atmosphere(box, "2025-07-01", 24)  # HRRR u10, v10, t2m, ...
 
 # lon, lat, time, z: one value per point; z in metres, positive up

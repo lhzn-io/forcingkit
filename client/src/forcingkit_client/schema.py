@@ -2,9 +2,9 @@
 
 The service writes two parent-ocean layouts. Schema `z-v3` (streamed donors) is already what the
 client returns: `u, v, temp, salt` on `(time, z, lat, lon)` with `z` in metres, positive up, and
-longitudes in -180..180. Older one-shot donors write `legacy` stores in the donor's own
-conventions: `depth` positive down, `latitude`/`longitude` names, and for HYCOM longitudes in
-0..360. `normalise` brings those to the z-v3 conventions and refuses any schema it does not know,
+longitudes in -180..180; NECOFS stores add `w`, the upward velocity, on the same axes. Older
+one-shot donors write `legacy` stores in the donor's own conventions: `depth` positive down,
+`latitude`/`longitude` names, and for HYCOM longitudes in 0..360. `normalise` brings those to the z-v3 conventions and refuses any schema it does not know,
 so a layout change fails here with a clear message instead of later on a variable name.
 The atmosphere (`hrrr-atm-v1`) and waves (`nwps-waves-v1`) stores are written in that convention
 too and pass through unchanged.

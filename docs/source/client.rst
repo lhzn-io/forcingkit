@@ -14,7 +14,7 @@ application's embedded Python (3.11 or newer).
    fk = Client("http://localhost:9598")
    box = (-70.9, 41.3, -70.6, 41.6)  # west, south, east, north
 
-   ocean = fk.ocean(box, "2025-07-01", 24)        # u, v, temp, salt, zeta on (time, z, lat, lon)
+   ocean = fk.ocean(box, "2025-07-01", 24)        # u, v, temp, salt, zeta on (time, z, lat, lon); w from NECOFS
    air = fk.atmosphere(box, "2025-07-01", 24)     # HRRR u10, v10, t2m, q2m, sp, dswrf, dlwrf, prate
    waves = fk.waves(box, "2025-07-01", 24, wfo="box", grid="CG1")  # NWPS hs, tp, dir, shts, ws, wdir
    buoy = fk.ndbc("44013", "2025-07-01", "2025-07-02", products=("stdmet", "adcp"))
