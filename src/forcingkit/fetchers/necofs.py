@@ -323,6 +323,9 @@ PARENT_UNITS = {
     "h": ("m", "sea_floor_depth_below_geoid"),
 }
 
+# w is the model's own (FVCOM ``ww``), recorded in the store as ``w_source``.
+W_SOURCE = "model"
+
 
 def _parent_static(lon_axis, lat_axis, z_centres, z_faces, h_grid, attrs) -> xr.Dataset:
     mask = np.isfinite(h_grid).astype(np.int8)
@@ -448,6 +451,7 @@ def iter_parent(
                         "necofs_product": necofs_product(dap_url),
                         "necofs_url": dap_url,
                         "schema": OBC_SCHEMA,
+                        "w_source": W_SOURCE,
                         "pad_cells": pad_cells,
                         "vertical_spacing_m": vertical_spacing_m,
                         "requested_bbox": list(bbox),

@@ -25,6 +25,7 @@ def _write_store(
     complete: bool = True,
     source: str = "forcingkit.fetchers.necofs",
     fields: tuple[str, ...] = NECOFS_FIELDS,
+    attrs: dict | None = None,
 ):
     lon = np.linspace(-70.95, -70.55, 5)
     lat = np.linspace(41.25, 41.65, 4)
@@ -38,7 +39,12 @@ def _write_store(
             for name in fields
         },
         coords={"time": time_, "z": [-3.0, -1.0], "lat": lat, "lon": lon},
-        attrs={"schema": "z-v3", "complete": complete, "source": source},
+        attrs={
+            "schema": "z-v3",
+            "complete": complete,
+            "source": source,
+            **(attrs or {}),
+        },
     )
     ds.to_zarr(path, mode="w", consolidated=True, zarr_format=2)
 
@@ -83,6 +89,7 @@ def test_job_builds_store_and_returns_stac_item(client, monkeypatch):
     assert item.bbox == pytest.approx([-70.95, 41.25, -70.55, 41.65])
     assert item.properties["forcingkit:schema"] == "z-v3"
     assert item.properties["forcingkit:donor"] == "necofs"
+    assert item.properties["forcingkit:w_source"] == "model"
     assert item.properties["start_datetime"] == "2026-06-01T00:00:00Z"
     assert item.properties["end_datetime"] == "2026-06-01T06:00:00Z"
     asset = item.assets["zarr"]
@@ -363,3 +370,22 @@ def test_store_guards(client, tmp_path):
     assert client.get("/api/v1/stores/elsewhere.zarr/.zmetadata").status_code == 400
     traversal = client.get("/api/v1/stores/obc_0123456789ab.zarr/..%2Fsecret.txt")
     assert traversal.status_code in (400, 404)
+
+
+def test_stac_item_names_where_w_comes_from(tmp_path):
+    from forcingkit_serve.stac import store_item
+
+    def w_source(name, **kwargs):
+        path = str(tmp_path / f"{name}.zarr")
+        _write_store(path, **kwargs)
+        props = store_item(name, path, "http://svc", "ocean", "x")["properties"]
+        return props.get("forcingkit:w_source")
+
+    hycom = "forcingkit.fetchers.hycom"
+    assert w_source("a", attrs={"w_source": "model"}) == "model"
+    assert w_source("b", source=hycom, attrs={"w_source": "continuity"}) == "continuity"
+    # A NECOFS store from before the attribute already holds the model's w.
+    assert w_source("c") == "model"
+    assert w_source("d", fields=("u", "v"), attrs={"w_source": "none"}) == "none"
+    # No w and no attribute (an atmosphere or wave store): no property.
+    assert w_source("e", source="elsewhere", fields=("u10",)) is None

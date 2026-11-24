@@ -5,6 +5,7 @@ href is the store served over HTTP (`/api/v1/stores`). The dict is built by hand
 needs no STAC dependency; a catalogue over the cache can later list the same Items.
 """
 
+import importlib
 import os
 from typing import Any, Dict, Optional
 
@@ -33,6 +34,29 @@ def _axis(ds: xr.Dataset, *names: str) -> Optional[np.ndarray]:
 
 def _iso(t: Any) -> str:
     return pd.Timestamp(t).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _w_source(ds: xr.Dataset) -> Optional[str]:
+    """Where the store's vertical velocity comes from: "model" (the donor's own w), "continuity"
+    (computed from u and v) or "none"; None for a store with no ocean velocity at all.
+
+    A store written before the attribute existed but already holding w (NECOFS parent stores
+    from 66061ff) takes its donor module's `W_SOURCE`.
+    """
+    value = ds.attrs.get("w_source")
+    if isinstance(value, str) and value:
+        return value
+    if "w" not in ds.data_vars:
+        return None
+    source = ds.attrs.get("source")
+    if not isinstance(source, str) or not source.startswith("forcingkit.fetchers."):
+        return None
+    try:
+        module = importlib.import_module(source)
+    except ImportError:
+        return None
+    found = getattr(module, "W_SOURCE", None)
+    return found if isinstance(found, str) else None
 
 
 def store_item(
@@ -66,6 +90,9 @@ def store_item(
             "forcingkit:donor": donor,
             "forcingkit:store_version": store_version(zarr_path),
         }
+        w_source = _w_source(ds)
+        if w_source is not None:
+            properties["forcingkit:w_source"] = w_source
     w, s, e, n = bbox if bbox is not None else (None, None, None, None)
     return {
         "type": "Feature",

@@ -143,7 +143,8 @@ def delivered_obc_donor(zarr_path: str) -> Optional[str]:
 def parent_store_is_current(zarr_path: str, schema: str) -> bool:
     """True when the parent store at `zarr_path` is complete under `schema` and holds every record
     field its donor now writes. A store cached before a donor gained a field (NECOFS ``w``, added
-    within ``z-v3``) is rebuilt on its next request, while other donors' stores stay valid."""
+    within ``z-v3``, or HYCOM's continuity ``w`` in its legacy store) is rebuilt on its next
+    request, while other donors' stores stay valid."""
     import importlib
 
     import zarr

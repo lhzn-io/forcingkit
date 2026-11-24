@@ -186,9 +186,15 @@ How forcingkit reads it
    read once more after 30 s. If any piece or field still fails, the fetch returns nothing, so
    the dispatcher reports the failure rather than writing a shortened store. A window with no
    data in a dataset's time range is not retried.
+7. **Vertical velocity.** HYCOM serves no ``w``, so it is computed from ``u`` and ``v`` by
+   continuity on the stitched window (``add_continuity_w``), integrating up from the deepest wet
+   depth, and corrected so it meets d(zeta)/dt at the surface (O'Brien 1970); the store records
+   ``w_source = "continuity"``. At ESPC-D-V02's hourly ``zeta``
+   steps ``w`` is NaN like ``u`` and ``v``. Method and limits: :doc:`fetchers`, "Vertical
+   velocity". A HYCOM store cached before ``w`` was added is rebuilt on its next request.
 
-Output is a Dataset with ``u``, ``v``, ``temp``, ``salt`` (``time, depth, lat, lon``) and
-``zeta`` (``time, lat, lon``), and the ``tides`` attribute (see `Tides`_). Land and cells below
+Output is a Dataset with ``u``, ``v``, ``w``, ``temp``, ``salt`` (``time, depth, lat, lon``) and
+``zeta`` (``time, lat, lon``), and the ``tides`` and ``w_source`` attributes. Land and cells below
 the sea floor are NaN. The time axis is 3-hourly for GLB experiments and hourly for ESPC-D-V02,
 where only ``zeta`` has data at every step. The dispatcher then resamples to hourly by linear
 interpolation, each variable from the steps at which it has data (so the 3-hourly fields are

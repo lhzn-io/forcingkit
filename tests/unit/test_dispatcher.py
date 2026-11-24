@@ -41,14 +41,14 @@ def test_dispatch_station_profiles_request_wlis(mocker):
     )
 
 
-def _parent_store(path, source, fields, complete=True):
+def _parent_store(path, source, fields, complete=True, schema="z-v3"):
     import numpy as np
     import zarr
 
     group = zarr.open_group(str(path), mode="w", zarr_format=2)
     for name in fields:
         group.create_array(name, data=np.zeros((1, 2, 2), np.float32))
-    group.attrs.update(schema="z-v3", complete=complete, source=source)
+    group.attrs.update(schema=schema, complete=complete, source=source)
     return str(path)
 
 
@@ -73,3 +73,16 @@ def test_a_parent_store_from_an_unknown_source_is_kept(tmp_path):
 
     path = _parent_store(tmp_path / "a", "somewhere.else", ("u", "v"))
     assert parent_store_is_current(path, "z-v3")
+
+
+def test_a_hycom_store_without_continuity_w_is_rebuilt(tmp_path):
+    from forcingkit.dispatcher import parent_store_is_current
+
+    hycom = "forcingkit.fetchers.hycom"
+    old = ("u", "v", "temp", "salt", "zeta")
+    assert not parent_store_is_current(
+        _parent_store(tmp_path / "a", hycom, old, schema="legacy"), "z-v3"
+    )
+    assert parent_store_is_current(
+        _parent_store(tmp_path / "b", hycom, old + ("w",), schema="legacy"), "z-v3"
+    )

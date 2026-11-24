@@ -183,7 +183,8 @@ Output: the ``z-v3`` parent store
      - m s-1
      - Upward velocity in z (FVCOM's ``ww``, not the sigma velocity omega). NaN where the file
        has no ``ww``. Added within ``z-v3``: a NECOFS store cached before it is rebuilt on its
-       next request; other donors write no ``w``.
+       next request. The store's ``w_source`` is ``"model"``; HYCOM's ``w`` is computed from
+       continuity instead (see :doc:`fetchers`).
    * - ``temp``
      - (time, z, lat, lon)
      - degree_Celsius

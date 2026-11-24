@@ -136,9 +136,14 @@ def interpolate_points(
 
 
 def _provenance(prefix: str, ds: xr.Dataset) -> Dict[str, Any]:
+    """The store's identity as trajectory attributes; an ocean store also names where its w
+    comes from (`forcingkit_ocean_w_source`: "model", "continuity" or "none")."""
+    keys = ["store_id", "store_version", "donor", "schema"]
+    if "forcingkit_w_source" in ds.attrs:
+        keys.append("w_source")
     return {
         f"forcingkit_{prefix}_{key}": ds.attrs.get(f"forcingkit_{key}", "")
-        for key in ("store_id", "store_version", "donor", "schema")
+        for key in keys
     }
 
 

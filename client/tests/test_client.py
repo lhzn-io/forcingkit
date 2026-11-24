@@ -17,15 +17,23 @@ STORE_ID = "obc_0123456789ab"
 BBOX = (-70.9, 41.3, -70.6, 41.6)
 
 
-def _item(base: str, store_id: str = STORE_ID, schema: str = "z-v3") -> dict:
+def _item(
+    base: str,
+    store_id: str = STORE_ID,
+    schema: str = "z-v3",
+    w_source: str | None = None,
+) -> dict:
+    props = {
+        "forcingkit:schema": schema,
+        "forcingkit:donor": "necofs",
+        "forcingkit:store_version": "1",
+    }
+    if w_source is not None:
+        props["forcingkit:w_source"] = w_source
     return {
         "type": "Feature",
         "id": store_id,
-        "properties": {
-            "forcingkit:schema": schema,
-            "forcingkit:donor": "necofs",
-            "forcingkit:store_version": "1",
-        },
+        "properties": props,
         # The service names itself as it saw the request; the client re-roots on its own URL.
         "assets": {
             "zarr": {"href": f"http://elsewhere:9598/api/v1/stores/{store_id}.zarr"}
@@ -36,8 +44,15 @@ def _item(base: str, store_id: str = STORE_ID, schema: str = "z-v3") -> dict:
 class FakeService:
     """/api/v1/jobs: queued, then running, then `final` ('succeeded' or 'failed')."""
 
-    def __init__(self, base: str, final: str = "succeeded", schema: str = "z-v3"):
+    def __init__(
+        self,
+        base: str,
+        final: str = "succeeded",
+        schema: str = "z-v3",
+        w_source: str | None = None,
+    ):
         self.base, self.final, self.schema = base, final, schema
+        self.w_source = w_source
         self.posts: list[dict] = []
         self.polls = 0
 
@@ -48,7 +63,7 @@ class FakeService:
             "status": status,
             "error": "All OBC donors failed" if status == "failed" else None,
             "status_url": f"http://elsewhere:9598/api/v1/jobs/{STORE_ID}",
-            "result": _item(self.base, schema=self.schema)
+            "result": _item(self.base, schema=self.schema, w_source=self.w_source)
             if status == "succeeded"
             else None,
         }
@@ -219,6 +234,21 @@ def test_interpolate_trajectory_through_client(store_server, tmp_path):
     )
     assert ds.attrs["forcingkit_ocean_store_id"] == STORE_ID
     assert ds.attrs["featureType"] == "trajectory"
+    # A service older than `forcingkit:w_source` leaves the attribute out.
+    assert "forcingkit_ocean_w_source" not in ds.attrs
+
+
+@pytest.mark.parametrize("w_source", ["model", "continuity"])
+def test_trajectory_names_where_w_comes_from(store_server, tmp_path, w_source):
+    root, base, _ = store_server
+    _publish(root, z_v3_store())
+    fk = _client(base, FakeService(base, w_source=w_source), tmp_path)
+    ocean = fk.ocean(BBOX, "2026-06-01T00:00:00Z", 6)
+    assert ocean.attrs["forcingkit_w_source"] == w_source
+    ds = fk.interpolate_trajectory(
+        np.array([-70.85]), np.array([41.35]), T0 + pd.to_timedelta([1.5], unit="h")
+    )
+    assert ds.attrs["forcingkit_ocean_w_source"] == w_source
 
 
 def _waves_store() -> xr.Dataset:

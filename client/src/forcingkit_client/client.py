@@ -238,6 +238,10 @@ class _Base:
                 "forcingkit_schema": props.get("forcingkit:schema") or "",
             }
         )
+        # Ocean stores say where their vertical velocity comes from ("model", "continuity" or
+        # "none"); a service older than the property, and other kinds of store, leave it out.
+        if props.get("forcingkit:w_source"):
+            ds.attrs["forcingkit_w_source"] = props["forcingkit:w_source"]
         return ds
 
 

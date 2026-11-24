@@ -126,6 +126,9 @@ def test_hycom_historical_stitch():
     assert ds.indexes["time"].equals(pd.date_range(start_date, "2018-12-05", freq="3h"))
     assert ds.sizes["lat"] == 5
     assert not np.isnan(ds["u"].values).any()
+    # w is computed after stitching, on the first grid, wherever u and v are.
+    assert ds["w"].dims == ds["u"].dims and np.isfinite(ds["w"].values).all()
+    assert ds.attrs["w_source"] == "continuity"
 
 
 def _three_hourly(ds, var):
@@ -145,14 +148,16 @@ def test_espc_merges_per_variable_datasets():
     assert [c.args[3] for c in mock_fetch.call_args_list] == [
         f"{TDS}/ESPC-D-V02/{v}" for v in ESPC_VARS
     ]
-    assert set(ds.data_vars) == {"u", "v", "temp", "salt", "zeta"}
+    assert set(ds.data_vars) == {"u", "v", "w", "temp", "salt", "zeta"}
     assert ds.indexes["time"].equals(
         pd.date_range("2025-03-01", "2025-03-03", freq="h")
     )
     assert not np.isnan(ds["zeta"].values).any()
-    for var in ("u", "v", "temp", "salt"):
+    # w is computed where u and v are, so it shares their 3-hourly steps.
+    for var in ("u", "v", "w", "temp", "salt"):
         assert _three_hourly(ds, var)
     assert ds.attrs["tides"] == "included"
+    assert ds.attrs["w_source"] == "continuity"
 
 
 def test_espc_trims_to_shared_span():
@@ -190,7 +195,7 @@ def test_stitch_across_espc_switch(caplog):
         ds = fetch_hycom_boundary_conditions(start_date, 48, BBOX)
 
     assert mock_fetch.call_count == 6
-    assert set(ds.data_vars) == {"u", "v", "temp", "salt", "zeta"}
+    assert set(ds.data_vars) == {"u", "v", "w", "temp", "salt", "zeta"}
     # 3-hourly before the switch, hourly after it.
     expected = pd.date_range(start_date, "2024-09-05", freq="3h").append(
         pd.date_range("2024-09-05 01:00", "2024-09-06", freq="h")

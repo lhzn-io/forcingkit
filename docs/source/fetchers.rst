@@ -143,6 +143,115 @@ and skipped unless the request sets ``allow_donor_fallback: false``, in which ca
 failure is an error. A donor that streams (NECOFS) either completes its store or fails; it never
 publishes a shortened one.
 
+Vertical velocity
+~~~~~~~~~~~~~~~~~
+
+Every parent store records where its upward velocity ``w`` (m s-1, positive up,
+``upward_sea_water_velocity``) comes from in its ``w_source`` attribute. The service repeats it
+as the STAC Item property ``forcingkit:w_source``, and ``forcingkit_client`` carries it into the
+store's ``forcingkit_w_source`` attribute and a trajectory's ``forcingkit_ocean_w_source``.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 14 16 70
+
+   * - Donor
+     - ``w_source``
+     - Notes
+   * - NECOFS
+     - ``model``
+     - FVCOM's own ``ww`` (the upward velocity in z, not the sigma velocity omega), interpolated
+       onto the ``z-v3`` levels like ``u`` and ``v``. See :doc:`necofs`.
+   * - HYCOM
+     - ``continuity``
+     - HYCOM serves no vertical velocity; ``w`` is computed from ``u`` and ``v`` on the store's
+       own 40 depths, in the legacy layout, then corrected so it meets d(zeta)/dt at the
+       surface (below). Computed on each native (3-hourly) step and interpolated to hourly with
+       the other fields.
+   * - NYOFS, DBOFS
+     - ``none``
+     - No ``w``. Their legacy stores hold sigma levels on a curvilinear grid with placeholder
+       depths, so there is no true depth to integrate over.
+
+The computed ``w`` (``forcingkit.continuity``) integrates the continuity equation
+du/dx + dv/dy + dw/dz = 0 up from the sea floor, where w = 0:
+
+.. math::
+
+   w(z) = -\int_{z_b}^{z} \frac{1}{R \cos\phi}
+          \left( \frac{\partial u}{\partial \lambda}
+          + \frac{\partial (v \cos\phi)}{\partial \phi} \right) dz'
+
+with R = 6371 km, longitude and latitude in radians, and centered differences on the regular
+grid (one-sided beside land and at the edge of the box; zero across an axis where a wet cell
+has no wet neighbor). A cell is wet where both ``u`` and ``v`` are finite; ``w`` is NaN on land
+and below the bed. HYCOM's depths are point levels, so each level is given faces midway to its
+neighbors, the top face at the surface, and the bed half a level below the deepest wet depth.
+
+The bare integral has no condition at the top, so it reaches the surface carrying the column's
+whole net divergence. HYCOM's z-level currents are remapped from its hybrid (isopycnal) layers
+and do not conserve volume on the z levels, so that residual is large. forcingkit removes it in
+proportion to height above the bed (`O'Brien (1970)
+<https://doi.org/10.1175/1520-0450(1970)009%3C0197:ASTTCV%3E2.0.CO;2>`__):
+
+.. math::
+
+   w_c(z) = w(z) - \frac{z - z_b}{z_s - z_b} \left( w(z_s) - \frac{\partial \zeta}{\partial t} \right)
+ight)
+
+where z_b is the bed and z_s the top of the column. This is the same as subtracting one constant
+from the divergence of every wet level, so ``w_c`` is 0 at the bed and d(zeta)/dt at the surface
+(from the store's own ``zeta``, centered in time; the advective term u . grad(zeta) is left out).
+The correction fixes the column total, not where in the column the error is.
+
+Limits of the computed ``w``:
+
+- It is noisy, and on HYCOM it is mostly error even after the correction. At 1/12 degree
+  (about 9 km) the divergence comes from differences of currents a few centimeters per second
+  apart across 18 km, on z levels that do not conserve volume. Over the whale shark 19A0564 box
+  ([-70.6, 39.6, -69.6, 40.3], the shelf break south of Nantucket) for 12 h from
+  2025-07-23 18:00 (ESPC-D-V02, read 2026-11-24):
+
+  .. list-table::
+     :header-rows: 1
+     :widths: 34 22 22 22
+
+     * - ``|w|`` (m s-1)
+       - median
+       - 99th percentile
+       - maximum
+     * - bare integral, all wet cells
+       - 6.0e-4
+       - 4.1e-3
+       - 8.4e-3
+     * - corrected, all wet cells
+       - 2.6e-4
+       - 2.9e-3
+       - 5.0e-3
+     * - bare integral, surface
+       - 3.7e-4
+       - 3.5e-3
+       - 8.1e-3
+     * - corrected, surface (= d(zeta)/dt)
+       - 4.2e-5
+       - 5.5e-5
+       - 5.6e-5
+
+  The correction brings the surface to the tide's rate and halves the median, but below
+  150 m the corrected median is still 0.6e-3 to 1.0e-3 m s-1 (50 to 90 m per day), about ten
+  times typical mesoscale vertical velocities (1e-5 to 1e-4 m s-1). Read it as an indication
+  of where the model's currents converge or diverge, not as a vertical speed.
+- It is sensitive to the bed. Errors accumulate upward from the deepest wet level, whose depth
+  the 40-level grid resolves only to the spacing between levels (tens to hundreds of meters at
+  depth). The surface correction spreads the column's residual linearly over its height; it
+  cannot tell which levels the error came from.
+- It ignores the bottom slope (no kinematic bed condition w = u . grad(-h)) and treats a
+  partial cell at the bed as a full one.
+
+Display it labeled as computed, and do not use it to move a particle or an animal vertically.
+A store cached before its donor gained ``w`` (NECOFS within ``z-v3``, HYCOM in its legacy
+layout) is rebuilt on its next request.
+
 Observations
 ------------
 

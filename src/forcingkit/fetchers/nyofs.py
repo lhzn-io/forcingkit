@@ -352,7 +352,12 @@ def fetch_nyofs_boundary_conditions(
                 "eta": np.arange(n_eta, dtype=np.float32),
                 "xi": np.arange(n_xi, dtype=np.float32),
             },
-            attrs={"type": "NOAA NYOFS OBC", "source": "NOAA CO-OPS"},
+            # No vertical velocity: the layout has no true depths to integrate over.
+            attrs={
+                "type": "NOAA NYOFS OBC",
+                "source": "NOAA CO-OPS",
+                "w_source": "none",
+            },
         )
 
         logger.info(

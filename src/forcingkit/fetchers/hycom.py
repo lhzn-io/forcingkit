@@ -98,6 +98,95 @@ def supports_bbox(bbox: list[float]) -> bool:
     return True
 
 
+# Fields of a delivered HYCOM store (legacy layout). `dispatcher.parent_store_is_current` rebuilds
+# a cached store that lacks one, such as a store written before w was added.
+PARENT_RECORD_DIMS = {
+    "u": ("depth", "lat", "lon"),
+    "v": ("depth", "lat", "lon"),
+    "w": ("depth", "lat", "lon"),
+    "temp": ("depth", "lat", "lon"),
+    "salt": ("depth", "lat", "lon"),
+    "zeta": ("lat", "lon"),
+}
+
+PARENT_UNITS = {
+    "u": ("m s-1", "eastward_sea_water_velocity"),
+    "v": ("m s-1", "northward_sea_water_velocity"),
+    "w": ("m s-1", "upward_sea_water_velocity"),
+    "temp": ("degree_Celsius", "sea_water_temperature"),
+    "salt": ("1e-3", "sea_water_practical_salinity"),
+    "zeta": ("m", "sea_surface_height_above_geoid"),
+}
+
+# HYCOM serves no vertical velocity; it is computed from u and v.
+W_SOURCE = "continuity"
+
+
+def add_continuity_w(ds: xr.Dataset) -> xr.Dataset:
+    """`ds` with `w`, the upward velocity from continuity (`forcingkit.continuity`), on HYCOM's
+    depths. Each depth is a point level; faces lie midway between them, with the top face at the
+    surface, so the bed is taken half a level below the deepest wet one. Steps where u or v is
+    missing (ESPC-D-V02's hourly sea surface height steps between its 3-hourly currents) get NaN
+    w, which the dispatcher interpolates across like u and v.
+
+    HYCOM's z-level currents are remapped from its hybrid layers and do not conserve volume, so
+    the bare integral reaches the surface far faster than the free surface moves. Each column's
+    residual is removed in proportion to height above the bed (`continuity_w`'s `surface_w`), so
+    w meets d(zeta)/dt at the surface (0 where there is no zeta or a single step)."""
+    from forcingkit.continuity import continuity_w, faces_from_levels
+
+    lat_var = "lat" if "lat" in ds.coords else "latitude"
+    lon_var = "lon" if "lon" in ds.coords else "longitude"
+    dims = ("depth", lat_var, lon_var)
+    lead = [str(d) for d in ds["u"].dims if d not in dims]
+    u = ds["u"].transpose(*lead, *dims)
+    v = ds["v"].transpose(*lead, *dims)
+    surface_w = _dzeta_dt(ds, lead, lat_var, lon_var)
+    # Depth is positive down from the surface; continuity integrates up from the bed.
+    order = np.argsort(-np.asarray(ds["depth"].values, dtype=np.float64))
+    z = -np.asarray(ds["depth"].values, dtype=np.float64)[order]
+    w = continuity_w(
+        u.values[..., order, :, :],
+        v.values[..., order, :, :],
+        ds[lon_var].values,
+        ds[lat_var].values,
+        z,
+        faces_from_levels(z),
+        surface_w=surface_w,
+    )
+    restore = np.argsort(order)
+    out = ds.assign(w=(u.dims, w[..., restore, :, :].astype(np.float32)))
+    unit, standard_name = PARENT_UNITS["w"]
+    out["w"].attrs.update(
+        units=unit,
+        standard_name=standard_name,
+        comment=(
+            "computed from continuity, w = 0 at the bed and d(zeta)/dt at the surface "
+            "(O'Brien 1970 correction); not a HYCOM output"
+        ),
+    )
+    out.attrs["w_source"] = W_SOURCE
+    return out
+
+
+def _dzeta_dt(
+    ds: xr.Dataset, lead: list[str], lat_var: str, lon_var: str
+) -> np.ndarray:
+    """d(zeta)/dt (m s-1) shaped (*lead, lat, lon), centered in time and one-sided at the ends;
+    0 without a time-varying zeta."""
+    shape = tuple(ds.sizes[d] for d in (*lead, lat_var, lon_var))
+    zeta = ds.get("zeta")
+    if (
+        zeta is None
+        or set(zeta.dims) != {*lead, lat_var, lon_var}
+        or "time" not in zeta.dims
+        or ds.sizes["time"] < 2
+    ):
+        return np.zeros(shape)
+    rate = zeta.differentiate("time", datetime_unit="s")
+    return np.broadcast_to(rate.transpose(*lead, lat_var, lon_var).values, shape)
+
+
 def _get_hycom_segment(target_dt: pd.Timestamp) -> Optional[_Segment]:
     """The HYCOM segment serving `target_dt`, or None before the first one."""
     current = None
@@ -187,6 +276,8 @@ def fetch_hycom_boundary_conditions(
         parts.append(part)
 
     ds = parts[0] if len(parts) == 1 else _stitch(parts)
+    if "u" in ds and "v" in ds and "depth" in ds["u"].dims:
+        ds = add_continuity_w(ds)
     ds.attrs["tides"] = tides
     return ds
 
