@@ -14,14 +14,21 @@ application's embedded Python (3.11 or newer).
    fk = Client("http://localhost:9598")
    box = (-70.9, 41.3, -70.6, 41.6)  # west, south, east, north
 
-   ocean = fk.ocean(box, "2025-07-01", 24)        # u, v, temp, salt, zeta on (time, z, lat, lon); w from NECOFS
+   ocean = fk.ocean(box, "2025-07-01", 24)        # u, v, w, temp, salt, zeta on (time, z, lat, lon)
+   doppio = fk.ocean(box, "2022-08-13", 24, donor="doppio")  # one named parent model
    air = fk.atmosphere(box, "2025-07-01", 24)     # HRRR u10, v10, t2m, q2m, sp, dswrf, dlwrf, prate
    waves = fk.waves(box, "2025-07-01", 24, wfo="box", grid="CG1")  # NWPS hs, tp, dir, shts, ws, wdir
    buoy = fk.ndbc("44013", "2025-07-01", "2025-07-02", products=("stdmet", "adcp"))
    elevation = fk.bathymetry(box, resolution_m=30)
 
 ``AsyncClient`` has the same methods as coroutines, for callers that must not block an event
-loop. Units are SI throughout; z is metres, positive up.
+loop. Units are SI throughout; z is meters, positive up.
+
+``ocean`` lets the service pick the parent model unless ``donor`` names one (``"necofs"``,
+``"hycom"``, ``"doppio"``, ...; see :doc:`fetchers`). A named donor is the only one tried, and
+the client raises ``ForcingkitError`` if the store it gets back names another donor in
+``forcingkit:donor``, which is what a service older than the option returns, since it ignores
+the field and ranks the donors.
 
 How a request is served
 -----------------------

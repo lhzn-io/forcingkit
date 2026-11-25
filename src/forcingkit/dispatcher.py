@@ -96,9 +96,10 @@ def dispatch_bounding_box_profiles_request(
 def _rank_obc_candidates(bbox: list[float]) -> list[tuple]:
     candidates = []
     for module, fetch_func in get_obc_fetchers():
-        if not module.supports_bbox(bbox):
-            continue
         meta = module.get_metadata()
+        # A donor that is only delivered when a caller names it (Doppio) never joins the ranking.
+        if not meta.get("auto_rank", True) or not module.supports_bbox(bbox):
+            continue
         domain_bbox = meta.get("domain_bbox")
         area = _domain_area(domain_bbox) if domain_bbox else float("inf")
         resolution = meta.get("resolution_approx_m", float("inf"))
@@ -121,6 +122,29 @@ def predict_obc_donor(bbox: list[float]) -> dict:
     if ranked:
         return ranked[0][2]
     return {}
+
+
+def obc_donor_ids() -> list[str]:
+    """Ids of every parent-ocean donor a caller may name, ranked or not."""
+    return [module.get_metadata()["id"] for module, _ in get_obc_fetchers()]
+
+
+def resolve_obc_donor(donor: str, bbox: list[float]) -> tuple:
+    """(module, fetch function or None, metadata) of the donor a caller named; raises ValueError
+    for an unknown id or a box outside the donor's domain, before anything is fetched."""
+    for module, fetch_func in get_obc_fetchers():
+        meta = module.get_metadata()
+        if meta["id"] != donor:
+            continue
+        if not module.supports_bbox(bbox):
+            raise ValueError(
+                f"Bounding box {bbox} lies outside the {meta['name']} domain "
+                f"{meta.get('domain_bbox')}"
+            )
+        return module, fetch_func, meta
+    raise ValueError(
+        f"Unknown parent-ocean donor {donor!r}; choose from {', '.join(obc_donor_ids())}"
+    )
 
 
 def delivered_obc_donor(zarr_path: str) -> Optional[str]:
@@ -181,9 +205,19 @@ def dispatch_obc_request(
     sponge_cells: int = 0,
     pad_cells: int = 3,
     vertical_spacing_m: float = 2.0,
+    donor: Optional[str] = None,
 ) -> str:
+    """Build (or find cached) the parent-ocean store for the box and window; returns its path.
+
+    Without `donor` the candidates are ranked (`_rank_obc_candidates`) and, with
+    `allow_donor_fallback`, tried in turn. A named `donor` (an id from `obc_donor_ids`, ranked or
+    not, such as "doppio") is the only one tried: an unknown id or a box outside its domain
+    raises ValueError at once, and its failure is an error, never a fallback. Its cache key
+    includes the donor, so it never shares a store with the ranked request for the same box.
+    """
     from forcingkit.fetchers.necofs import OBC_SCHEMA
 
+    named = resolve_obc_donor(donor, bbox) if donor else None
     os.makedirs(cache_dir, exist_ok=True)
     obc_cache_dir = os.path.join(cache_dir, "obc")
     os.makedirs(obc_cache_dir, exist_ok=True)
@@ -193,6 +227,9 @@ def dispatch_obc_request(
 
     if not zarr_path:
         key_str = f"obc_{start_date}_{duration_hours}_{bbox[0]}_{bbox[1]}_{bbox[2]}_{bbox[3]}_s{sponge_cells}_{include_tides}_{tidal_model}_{OBC_SCHEMA}_p{pad_cells}_dz{vertical_spacing_m}"
+        if donor:
+            # Only a named donor changes the key, so ranked requests keep their cached stores.
+            key_str += f"_donor={donor}"
         key_hash = hashlib.sha256(key_str.encode()).hexdigest()[:12]
         zarr_name = f"obc_{key_hash}.zarr"
         zarr_path = os.path.join(obc_cache_dir, zarr_name)
@@ -215,6 +252,7 @@ def dispatch_obc_request(
                             "schema": OBC_SCHEMA,
                             "pad_cells": pad_cells,
                             "vertical_spacing_m": vertical_spacing_m,
+                            "donor": donor,
                         },
                         f,
                         indent=2,
@@ -226,7 +264,11 @@ def dispatch_obc_request(
         logger.info(f"Cache hit for OBC: {zarr_path}")
         return zarr_path
 
-    ranked = _rank_obc_candidates(bbox)
+    if named is not None:
+        ranked = [named]
+        allow_donor_fallback = False
+    else:
+        ranked = _rank_obc_candidates(bbox)
     if not ranked:
         raise ValueError(f"No suitable OBC fetcher found for bbox {bbox}")
 
@@ -810,18 +852,21 @@ def _supported_kwargs(func, **kwargs) -> dict:
 
 
 def get_obc_fetchers():
+    """(module, fetch function or None) for every parent-ocean donor. A donor counts when it has
+    a `fetch_<id>_boundary_conditions` function (the one-shot path) or an `iter_parent` (streamed);
+    Doppio has only the latter, and its metadata keeps it out of the automatic ranking."""
     from forcingkit.fetchers import (
         dbofs,
+        doppio,
         hycom,
         necofs,
         nyofs,
     )
 
-    # Dynamically discover fetch_xxx_boundary_conditions functions.
-    # Not all modules have implemented OBC yet, so we check with hasattr.
     fetchers = []
-    for module in [nyofs, dbofs, necofs, hycom]:
+    for module in [nyofs, dbofs, necofs, hycom, doppio]:
         func_name = "fetch_" + module.__name__.split(".")[-1] + "_boundary_conditions"
-        if hasattr(module, func_name):
-            fetchers.append((module, getattr(module, func_name)))
+        func = getattr(module, func_name, None)
+        if func is not None or hasattr(module, "iter_parent"):
+            fetchers.append((module, func))
     return fetchers

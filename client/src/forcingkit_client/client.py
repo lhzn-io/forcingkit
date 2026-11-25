@@ -56,9 +56,16 @@ def _bbox(bbox: BBox) -> Dict[str, float]:
 
 
 def _ocean_request(
-    bbox, start, hours, vertical_spacing_m, pad_cells, sponge_cells, **options
+    bbox,
+    start,
+    hours,
+    vertical_spacing_m,
+    pad_cells,
+    sponge_cells,
+    donor: Optional[str] = None,
+    **options,
 ):
-    return {
+    request = {
         "bbox": _bbox(bbox),
         "start_date": iso_utc(start),
         "duration_hours": int(hours),
@@ -69,6 +76,22 @@ def _ocean_request(
         "sponge_cells": int(sponge_cells),
         **options,
     }
+    if donor:
+        request["donor"] = str(donor)
+    return request
+
+
+def _check_donor(item: Dict[str, Any], donor: Optional[str]) -> Dict[str, Any]:
+    """`item`, unless a named `donor` is not the one that delivered it: a service older than the
+    `donor` option ignores it and ranks the donors, and its store must not pass for the named one."""
+    delivered = item["properties"].get("forcingkit:donor")
+    if donor and delivered != donor:
+        raise ForcingkitError(
+            f"asked for donor {donor!r} but store {item['id']} is from {delivered!r}; "
+            "the service may predate the donor option",
+            detail={"requested": donor, "delivered": delivered},
+        )
+    return item
 
 
 def _atmosphere_request(bbox, start, hours, resolution_deg, margin_deg, cache_bust):
@@ -291,16 +314,31 @@ class Client(_Base):
         vertical_spacing_m: float = 2.0,
         pad_cells: int = 1,
         sponge_cells: int = 0,
+        donor: Optional[str] = None,
         **options: Any,
     ) -> xr.Dataset:
         """The parent ocean over `bbox` for `hours` from `start`: `u, v` (m/s), `temp` (deg C),
-        `salt`, `zeta` (m) on `(time, z, lat, lon)`, z in metres positive up, plus `w` (m/s,
-        upward) from donors that provide it (NECOFS). Further `options`
-        (`include_tides`, `allow_donor_fallback`, `cache_bust`, ...) pass through to the service."""
+        `salt`, `zeta` (m) on `(time, z, lat, lon)`, z in meters positive up, plus `w` (m/s,
+        upward; its origin in the `forcingkit_w_source` attribute).
+
+        `donor` names one parent model to use alone ("necofs", "hycom", "doppio", ...): the
+        service neither ranks nor falls back, and refuses an unknown id or a box outside that
+        model's domain. A store from any other donor (a service too old to know the option) is
+        refused here with ForcingkitError. Without it the service picks the donor. Further
+        `options` (`include_tides`, `allow_donor_fallback`, `cache_bust`, ...) pass through to
+        the service."""
         payload = _ocean_request(
-            bbox, start, hours, vertical_spacing_m, pad_cells, sponge_cells, **options
+            bbox,
+            start,
+            hours,
+            vertical_spacing_m,
+            pad_cells,
+            sponge_cells,
+            donor=donor,
+            **options,
         )
-        return self.open_item(self._wait("/api/v1/jobs/obc", payload))
+        item = _check_donor(self._wait("/api/v1/jobs/obc", payload), donor)
+        return self.open_item(item)
 
     def atmosphere(
         self,
@@ -433,12 +471,21 @@ class AsyncClient(_Base):
         vertical_spacing_m: float = 2.0,
         pad_cells: int = 1,
         sponge_cells: int = 0,
+        donor: Optional[str] = None,
         **options: Any,
     ) -> xr.Dataset:
+        """`Client.ocean` (including the `donor` option) for an asynchronous client."""
         payload = _ocean_request(
-            bbox, start, hours, vertical_spacing_m, pad_cells, sponge_cells, **options
+            bbox,
+            start,
+            hours,
+            vertical_spacing_m,
+            pad_cells,
+            sponge_cells,
+            donor=donor,
+            **options,
         )
-        item = await self._wait("/api/v1/jobs/obc", payload)
+        item = _check_donor(await self._wait("/api/v1/jobs/obc", payload), donor)
         return await asyncio.to_thread(self.open_item, item)
 
     async def atmosphere(

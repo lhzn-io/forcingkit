@@ -69,7 +69,7 @@ Parent ocean (``/api/v1/obc``)
        <https://www.umassd.edu/smast/>`__ and `WHOI <https://www.whoi.edu/>`__), unstructured mesh
        with 45 sigma layers. Daily history files from 2025-01-01, else a monthly file (the hindcast
        from 1978, GOM3 mesh to 2016; the monthly GOM7 archive for 2025), then the rolling forecast.
-       The only donor that streams the ``z-v3`` parent store. See :doc:`necofs`.
+       Streams the ``z-v3`` parent store. See :doc:`necofs`.
    * - **NYOFS**
      - `NOAA New York/New Jersey Operational Forecast System
        <https://tidesandcurrents.noaa.gov/ofs/nyofs/nyofs.html>`__ (`NOAA CO-OPS
@@ -93,9 +93,9 @@ Parent ocean (``/api/v1/obc``)
        attribute (``"none"``, ``"included"`` or ``"mixed"``). Last-resort fallback; legacy
        output layout.
 
-:doc:`Doppio <doppio>` is not a donor yet: ``forcingkit.fetchers.doppio.volume`` returns its
-full-depth subsets on the model's own grid for comparison with NECOFS, and the dispatcher does
-not rank it.
+:doc:`Doppio <doppio>` (ROMS, about 7 km, Mid-Atlantic Bight and Gulf of Maine) streams the
+``z-v3`` parent store too, but only when a request names it (``donor: "doppio"``); the
+dispatcher never ranks it, so no request that names no donor changes. See :doc:`doppio`.
 
 `TPXO10 <https://www.tpxo.net/>`__ tidal harmonics are a roadmap item, not integrated; the
 `pyTMD <https://github.com/pyTMD/pyTMD>`__ dependency was removed on
@@ -140,8 +140,16 @@ system is the best local one:
 
 The dispatcher tries the candidates in order. A donor that returns nothing or raises is logged
 and skipped unless the request sets ``allow_donor_fallback: false``, in which case the first
-failure is an error. A donor that streams (NECOFS) either completes its store or fails; it never
-publishes a shortened one.
+failure is an error. A donor that streams (NECOFS, Doppio) either completes its store or fails;
+it never publishes a shortened one.
+
+A request may instead name its donor with ``donor`` (an id: ``necofs``, ``hycom``, ``nyofs``,
+``dbofs`` or ``doppio``). That donor is the only one tried, with no ranking and no fallback;
+an unknown id or a box outside its domain is refused with HTTP 400 before anything is queued,
+and its failure is an error. The donor is part of the store id, so a store built for a named
+donor is never served for the ranked request on the same box (which may have fallen back to
+another donor) or the other way round. Without ``donor``, ranking and fallback are as above and
+store ids are unchanged. The delivered donor is in the STAC Item's ``forcingkit:donor``.
 
 Vertical velocity
 ~~~~~~~~~~~~~~~~~
@@ -162,6 +170,10 @@ store's ``forcingkit_w_source`` attribute and a trajectory's ``forcingkit_ocean_
      - ``model``
      - FVCOM's own ``ww`` (the upward velocity in z, not the sigma velocity omega), interpolated
        onto the ``z-v3`` levels like ``u`` and ``v``. See :doc:`necofs`.
+   * - Doppio
+     - ``model``
+     - ROMS's own ``w`` (upward, in z), averaged from the level interfaces to the layer centers
+       and interpolated onto the ``z-v3`` levels like ``u`` and ``v``. See :doc:`doppio`.
    * - HYCOM
      - ``continuity``
      - HYCOM serves no vertical velocity; ``w`` is computed from ``u`` and ``v`` on the store's

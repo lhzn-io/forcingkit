@@ -14,8 +14,9 @@ Gulf of Maine, run by the `Rutgers University Ocean Modeling Group
 
 ``forcingkit.fetchers.doppio`` reads either as a full-depth subset in the same layout as the
 NECOFS volume (:doc:`necofs`, schema ``volume-v1``), so a comparison between the two models, or
-between either and a downstream ocean model, can treat them alike. It is a library function: no
-service route or parent-ocean (``z-v3``) delivery uses it yet.
+between either and a downstream ocean model, can treat them alike. It is also a parent-ocean
+donor in the NECOFS ``z-v3`` layout, delivered only when a request names it (see `Parent
+ocean`_).
 
 Underlying model
 ----------------
@@ -109,6 +110,80 @@ levels, 6 MB) took 45 s from Rutgers on 2026-11-17, and 0.1 s from the cache.
 
 ``forcingkit.layered_mesh.doppio(bbox, start, end)`` returns the same subset as a
 ``LayeredMesh`` (see :doc:`layered_mesh`) for rendering and sections next to NECOFS.
+
+Parent ocean
+------------
+
+``doppio.iter_parent(start_date, duration_hours, bbox, pad_cells, vertical_spacing_m)`` streams
+Doppio in the parent-ocean layout NECOFS writes (schema ``z-v3``, :doc:`necofs`): ``u``, ``v``,
+``w``, ``temp``, ``salt`` on ``(time, z, lat, lon)``, ``zeta`` on ``(time, lat, lon)``, and
+``h``, ``mask``, ``z_face``, with the same units and standard names, so a store from either
+model reads the same way. The service delivers it only for a request that names it:
+
+.. code-block:: json
+
+   {"bbox": {"min_lon": -69.72, "min_lat": 39.80, "max_lon": -69.30, "max_lat": 40.05},
+    "start_date": "2022-08-13T02:00:00", "duration_hours": 12, "donor": "doppio"}
+
+to ``POST /api/v1/jobs/obc`` (or ``fk.ocean(box, start, hours, donor="doppio")`` from the
+client). The automatic ranking never picks Doppio, so requests that name no donor keep their
+donor and their store ids. Steps:
+
+1. **Read.** ``read_volume`` over the box plus the padding and 0.15 degree more, so every
+   target lies among read cell centers, 24 hours per request, from the reanalysis if it holds
+   the whole window, else the real-time system (a window across neither raises). ``u`` and
+   ``v`` arrive at the cell centers, rotated to east and north by the grid ``angle``; ``w`` is
+   ROMS's ``w`` averaged from the interfaces to the layer centers. A missing hour is an error.
+2. **Horizontal.** Linear interpolation from the curvilinear cell centers (a Delaunay
+   triangulation) onto a regular grid every 0.02 degree (about 2 km, finer than the 7 km
+   cells) covering the box plus ``pad_cells`` grid steps on every side. A target in a triangle
+   with a land cell center is NaN, so the coast is drawn up to one cell conservatively.
+3. **Vertical.** Each s-level sits at ``siglay * (h + zeta) + zeta`` for its column and is
+   interpolated onto fixed levels every ``vertical_spacing_m`` (``necofs.sigma_to_z``), bottom to
+   top; levels below the sea floor are NaN.
+
+The store records ``w_source = "model"``, ``doppio_product``, ``doppio_url``, ``citation``
+and ``horizontal_spacing_deg``; ``forcingkit:donor`` in its STAC Item is ``doppio``.
+
+RED001's box ([-69.72, 39.80, -69.30, 40.05], the slope south of Georges Bank) for 12 h from
+2022-08-13 02:00, with 20 m levels and one cell of padding, read 2026-11-24, next to the
+NECOFS store for the same request:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 30 30
+
+   * - Over the box
+     - Doppio
+     - NECOFS
+   * - Build time
+     - 10 s (reanalysis)
+     - 132 s (GOM7 monthly hindcast)
+   * - Grid points, z levels
+     - 13 x 22, 95
+     - 125 x 211, 91
+   * - Bed depth (min, median, max)
+     - 109, 514, 1784 m
+     - 100, 417, 1804 m
+   * - Ocean at the surface
+     - 100 %
+     - 100 %
+   * - Surface speed (median, 90th percentile)
+     - 0.32, 0.55 m/s
+     - 0.21, 0.39 m/s
+   * - Speed at 510 m (median)
+     - 0.28 m/s
+     - 0.11 m/s
+   * - ``|w|`` over wet cells (median, 99th percentile)
+     - 1.1e-3, 7.6e-3 m/s
+     - 1.0e-3, 1.0e-2 m/s
+
+The two models agree on the bathymetry and on the size of ``w`` (both about 1e-3 m/s below
+500 m, where the slope's internal tide moves water up and down), but not on the currents. The
+vector difference between them at 10 m has a median of 0.25 m/s against a NECOFS median speed
+of 0.21 m/s, and Doppio's box-mean surface current turns through about three quarters of a
+circle in 9 hours (a semidiurnal tidal ellipse) where NECOFS's barely turns. A track corrected
+with one or the other will differ by more than either model's own uncertainty suggests.
 
 Limits
 ------

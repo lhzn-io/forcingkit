@@ -30,6 +30,7 @@ import pandas as pd
 import xarray as xr
 
 from forcingkit import settings
+from forcingkit.fetchers import necofs
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,9 @@ def get_metadata() -> dict:
         "resolution_approx_m": 7000.0,
         "type_desc": "Curvilinear Arakawa C-grid, 40 s-levels",
         "domain_bbox": list(DOMAIN_BBOX),
+        # Delivered only when a request names it (`donor: "doppio"`); the automatic ranking
+        # leaves it out, so no existing request changes donor.
+        "auto_rank": False,
     }
 
 
@@ -502,3 +506,162 @@ def volume(
         os.replace(tmp, path)
         logger.info(f"Doppio volume cached at {path}")
     return out
+
+
+# Parent-ocean delivery (schema z-v3), the NECOFS layout: the same record fields and units, so a
+# store from either donor reads the same way.
+PARENT_RECORD_DIMS = dict(necofs.PARENT_RECORD_DIMS)
+PARENT_UNITS = dict(necofs.PARENT_UNITS)
+
+# w is ROMS's own (upward velocity in z), recorded in the store as ``w_source``.
+W_SOURCE = "model"
+
+# The regular grid the parent is interpolated onto, degrees: about 2 km, finer than Doppio's
+# 7 km cells so a track box of a few tenths of a degree still spans many points.
+PARENT_SPACING_DEG = 0.02
+
+# Hours read from the aggregation per request; each read covers the box for this many hours.
+_READ_HOURS = 24
+
+# Beyond the padded box, the native cells read so every target point lies inside the
+# triangulation of read cell centers (one Doppio cell is up to about 0.09 degree across).
+_READ_MARGIN_DEG = 0.15
+
+
+def iter_parent(
+    start_date: str,
+    duration_hours: int,
+    bbox: list[float],
+    pad_cells: int = 3,
+    vertical_spacing_m: float = 2.0,
+    reader=None,
+):
+    """Doppio as a parent ocean, one hourly record at a time, in the NECOFS layout (z-v3).
+
+    Yields `("static", Dataset)` once (lon, lat, z, z_face, h, mask and the store attributes),
+    then `("record", time, {u, v, w, temp, salt, zeta})` for each of `duration_hours` hours from
+    `start_date`. The fields are read with `read_volume` (u and v already moved to the cell
+    centers and rotated to east and north; w is ROMS's w averaged to the layer centers),
+    interpolated linearly from the curvilinear cell centers onto a regular grid every
+    `PARENT_SPACING_DEG` covering `bbox` plus `pad_cells` grid steps on every side, then from the
+    s-levels onto fixed z levels every `vertical_spacing_m` meters, bottom to top, with each
+    layer at z = siglay * (h + zeta) + zeta for its column (`necofs.sigma_to_z`). A target point
+    in a triangle with a land cell center, outside the read cells, or below the sea floor is NaN.
+
+    The window must lie within one aggregation (`product_url`). Raises rather than returning a
+    short record: an unreachable aggregation or a missing hour ends the delivery with an error.
+    `reader` (default `read_volume`) is for tests.
+    """
+    from scipy.spatial import Delaunay
+
+    reader = reader or read_volume
+    if not supports_bbox(bbox):
+        raise ValueError(f"Bounding box {list(bbox)} outside the Doppio domain.")
+    if duration_hours < 1:
+        raise ValueError(f"duration_hours must be at least 1, got {duration_hours}")
+    min_lon, min_lat, max_lon, max_lat = (float(b) for b in bbox)
+    wanted = pd.date_range(
+        _utc_naive(start_date).floor("h"), periods=duration_hours, freq="1h"
+    )
+    url = product_url(wanted[0], wanted[-1])
+
+    d = PARENT_SPACING_DEG
+    pad = pad_cells * d
+    lon_axis = np.arange(min_lon - pad, max_lon + pad + d / 2, d)
+    lat_axis = np.arange(min_lat - pad, max_lat + pad + d / 2, d)
+    lon_grid, lat_grid = np.meshgrid(lon_axis, lat_axis)
+    target_pts = np.column_stack((lon_grid.ravel(), lat_grid.ravel()))
+    shape = lon_grid.shape
+    margin = pad + _READ_MARGIN_DEG
+    read_box = [min_lon - margin, min_lat - margin, max_lon + margin, max_lat + margin]
+
+    interp = None
+    h_grid = siglay_grid = z_centres = None
+    for first in range(0, duration_hours, _READ_HOURS):
+        hours = wanted[first : first + _READ_HOURS]
+        vol = reader(
+            read_box,
+            hours[0],
+            len(hours),
+            dap_url=url,
+            variables=("u", "v", "ww", "temp", "salinity", "zeta"),
+        )
+        got = pd.DatetimeIndex(vol["time"].values)
+        missing = hours.difference(got)
+        if len(missing):
+            raise RuntimeError(
+                f"{url} lacks {len(missing)} of {len(hours)} hours from {hours[0]} "
+                f"(first missing {missing[0]})"
+            )
+        vol = vol.sel(time=hours)
+
+        if interp is None:
+            logger.info(
+                "Building Doppio parent interpolation weights and vertical grid..."
+            )
+            cells = np.column_stack(
+                (vol["lon"].values.ravel(), vol["lat"].values.ravel())
+            )
+            interp = necofs.Barycentric(Delaunay(cells), target_pts, shape)
+            water = np.asarray(vol["mask"].values, dtype=bool)
+            h_grid = interp(np.where(water, vol["h"].values, np.nan).ravel())
+            if not np.any(np.isfinite(h_grid)):
+                raise ValueError(f"No Doppio ocean inside {list(bbox)}")
+            n_lay = vol.sizes["siglay"]
+            siglay_grid = interp(np.asarray(vol["siglay"].values).reshape(n_lay, -1))
+            z_centres, z_faces = necofs.z_levels_for_depth(
+                float(np.nanmax(h_grid)), vertical_spacing_m
+            )
+            static = necofs._parent_static(
+                lon_axis,
+                lat_axis,
+                z_centres,
+                z_faces,
+                h_grid,
+                {
+                    "type": "Doppio ROMS parent ocean",
+                    "doppio_source": SOURCE,
+                    "doppio_product": doppio_product(url),
+                    "doppio_url": url,
+                    "citation": REANALYSIS_CITATION
+                    if url == REANALYSIS_URL
+                    else SOURCE,
+                    "schema": necofs.OBC_SCHEMA,
+                    "w_source": W_SOURCE,
+                    "pad_cells": pad_cells,
+                    "vertical_spacing_m": vertical_spacing_m,
+                    "horizontal_spacing_deg": d,
+                    "requested_bbox": [float(b) for b in bbox],
+                    "vertical_datum": "model mean sea level (the source metadata states "
+                    "no datum)",
+                },
+            )
+            static["mask"].attrs["long_name"] = (
+                "1 where Doppio has ocean at every surrounding cell center, 0 elsewhere"
+            )
+            yield ("static", static)
+        assert h_grid is not None and siglay_grid is not None and z_centres is not None
+
+        def columns(name, i):
+            a = np.asarray(vol[name].values[i], dtype=np.float64)
+            return a.reshape(a.shape[0], -1)
+
+        for i, t in enumerate(hours):
+            zeta_t = interp(np.asarray(vol["zeta"].values[i], dtype=np.float64).ravel())
+            z_bottom = np.where(np.isfinite(zeta_t), -h_grid, np.nan)
+            z_layers = siglay_grid * (h_grid + zeta_t)[None] + zeta_t[None]
+            fields = {
+                "u": interp(columns("u", i)),
+                "v": interp(columns("v", i)),
+                "w": interp(columns("ww", i)),
+                "temp": interp(columns("temp", i)),
+                "salt": interp(columns("salinity", i)),
+            }
+            out = {
+                k: necofs.sigma_to_z(v, z_layers, z_bottom, z_centres).astype(
+                    np.float32
+                )
+                for k, v in fields.items()
+            }
+            out["zeta"] = zeta_t.astype(np.float32)
+            yield ("record", t, out)

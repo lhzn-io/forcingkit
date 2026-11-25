@@ -154,6 +154,9 @@ class OBCRequest(BaseModel):
     # brackets the child, and the spacing of the fixed z levels.
     pad_cells: int = 3
     vertical_spacing_m: float = 2.0
+    # A donor id ("necofs", "hycom", "doppio", ...) to use alone: no ranking and no fallback, and
+    # an unknown id or a box outside its domain is a 400. None ranks the donors as before.
+    donor: str | None = None
 
 
 class TideRequest(BaseModel):
@@ -368,11 +371,27 @@ def _obc_hash_source(request: "OBCRequest", bbox_list: list, donor_id: str) -> s
     served for a newer request."""
     from forcingkit.fetchers.necofs import OBC_SCHEMA
 
-    return (
+    source = (
         f"{bbox_list}_{request.start_date}_{request.duration_hours}_{donor_id}_"
         f"{request.sponge_cells}_{request.include_tides}_{request.tidal_model}_obc_"
         f"{OBC_SCHEMA}_p{request.pad_cells}_dz{request.vertical_spacing_m}"
     )
+    # A named donor has a store of its own: a ranked request for the same box may have fallen
+    # back to another donor, and its store must never answer a request that named one.
+    if request.donor:
+        source += f"_donor={request.donor}"
+    return source
+
+
+def _obc_donor_id(request: "OBCRequest") -> str:
+    """The donor `request` names (checked: ValueError for an unknown id or a box outside its
+    domain), else the one the ranking predicts."""
+    from forcingkit.dispatcher import predict_obc_donor, resolve_obc_donor
+
+    bbox = _bbox_list(request.bbox)
+    if request.donor:
+        return resolve_obc_donor(request.donor, bbox)[2]["id"]
+    return predict_obc_donor(bbox).get("id", "unknown")
 
 
 def _zip_is_stale(zip_path: str, store_path: str) -> bool:
@@ -392,35 +411,24 @@ def _zip_is_stale(zip_path: str, store_path: str) -> bool:
 
 @app.post("/api/v1/obc/cache")
 async def cache_obc(request: OBCRequest) -> Dict[str, Any]:
-    import hashlib
-
-    from forcingkit.dispatcher import predict_obc_donor
-
-    bbox_list = [
-        request.bbox.min_lon,
-        request.bbox.min_lat,
-        request.bbox.max_lon,
-        request.bbox.max_lat,
-    ]
-    donor_meta = predict_obc_donor(bbox_list)
-    donor_id = donor_meta.get("id", "unknown")
-    hash_str = _obc_hash_source(request, bbox_list, donor_id)
-    raw_id = hashlib.md5(hash_str.encode()).hexdigest()[:12]
-    return {"status": "success", "zarr_id": f"obc_{raw_id}"}
+    try:
+        zarr_id, _, _ = _obc_store(request)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "success", "zarr_id": zarr_id}
 
 
 @app.post("/api/v1/obc/predict-donor")
 async def predict_obc_donor_endpoint(request: OBCRequest) -> Dict[str, Any]:
     try:
-        from forcingkit.dispatcher import predict_obc_donor
+        from forcingkit.dispatcher import predict_obc_donor, resolve_obc_donor
 
-        bbox_list = [
-            request.bbox.min_lon,
-            request.bbox.min_lat,
-            request.bbox.max_lon,
-            request.bbox.max_lat,
-        ]
-        donor_meta = predict_obc_donor(bbox_list)
+        bbox_list = _bbox_list(request.bbox)
+        donor_meta = (
+            resolve_obc_donor(request.donor, bbox_list)[2]
+            if request.donor
+            else predict_obc_donor(bbox_list)
+        )
         if not donor_meta:
             return {
                 "status": "error",
@@ -436,12 +444,11 @@ async def predict_obc_donor_endpoint(request: OBCRequest) -> Dict[str, Any]:
 # Plain `def` for the long handlers: FastAPI runs them in its thread pool, so an hour-long parent
 # fetch no longer blocks every other request on the event loop.
 def _obc_store(request: OBCRequest) -> tuple[str, str, str]:
-    """(zarr_id, zarr_path, predicted donor id) of the parent store `request` names."""
+    """(zarr_id, zarr_path, donor id: named or predicted) of the parent store `request` names;
+    ValueError for a named donor that is unknown or does not cover the box."""
     import hashlib
 
-    from forcingkit.dispatcher import predict_obc_donor
-
-    donor_id = predict_obc_donor(_bbox_list(request.bbox)).get("id", "unknown")
+    donor_id = _obc_donor_id(request)
     # Hash unique configuration plus donor
     hash_str = _obc_hash_source(request, _bbox_list(request.bbox), donor_id)
     zarr_id = f"obc_{hashlib.md5(hash_str.encode()).hexdigest()[:12]}"
@@ -473,6 +480,7 @@ def _build_obc(request: OBCRequest) -> Dict[str, Any]:
             sponge_cells=request.sponge_cells,
             pad_cells=request.pad_cells,
             vertical_spacing_m=request.vertical_spacing_m,
+            donor=request.donor,
         )
         status = "success"
     return {
@@ -488,6 +496,10 @@ def _build_obc(request: OBCRequest) -> Dict[str, Any]:
 
 @app.post("/api/v1/obc")
 def generate_obc(request: OBCRequest) -> Dict[str, Any]:
+    try:
+        _obc_store(request)  # a bad donor name is the caller's error, not the service's
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     try:
         return _build_obc(request)
     except Exception as e:
@@ -783,11 +795,15 @@ def _submit(
 def submit_obc_job(request: OBCRequest, http: Request) -> JSONResponse:
     """Queue the parent-ocean build that /api/v1/obc runs; poll `status_url` for the result, a
     STAC Item whose `zarr` asset is the store served over HTTP. A cached store that lacks a
-    field its donor now writes is rebuilt, as in `_build_obc`."""
+    field its donor now writes is rebuilt, as in `_build_obc`. A named `donor` that is unknown or
+    does not cover the box is refused with 400 before anything is queued."""
     from forcingkit.dispatcher import delivered_obc_donor, parent_store_is_current
     from forcingkit.fetchers.necofs import OBC_SCHEMA
 
-    zarr_id, zarr_path, donor_id = _obc_store(request)
+    try:
+        zarr_id, zarr_path, donor_id = _obc_store(request)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return _submit(
         http,
         zarr_id,

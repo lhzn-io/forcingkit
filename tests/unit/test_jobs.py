@@ -389,3 +389,55 @@ def test_stac_item_names_where_w_comes_from(tmp_path):
     assert w_source("d", fields=("u", "v"), attrs={"w_source": "none"}) == "none"
     # No w and no attribute (an atmosphere or wave store): no property.
     assert w_source("e", source="elsewhere", fields=("u10",)) is None
+
+
+def test_a_named_donor_gets_its_own_store_and_is_passed_on(client, monkeypatch):
+    calls = []
+
+    def fake_dispatch(**kwargs):
+        calls.append(kwargs)
+        _write_store(kwargs["zarr_path"], source="forcingkit.fetchers.doppio")
+        return kwargs["zarr_path"]
+
+    monkeypatch.setattr(dispatcher, "dispatch_obc_request", fake_dispatch)
+    ranked = client.post("/api/v1/obc/cache", json=OBC).json()["zarr_id"]
+    named = client.post("/api/v1/obc/cache", json={**OBC, "donor": "doppio"}).json()
+    necofs = client.post("/api/v1/obc/cache", json={**OBC, "donor": "necofs"}).json()
+    assert len({ranked, named["zarr_id"], necofs["zarr_id"]}) == 3
+
+    body = client.post("/api/v1/jobs/obc", json={**OBC, "donor": "doppio"}).json()
+    assert body["job_id"] == named["zarr_id"]
+    done = _wait(client, body["status_url"])
+    assert done["status"] == "succeeded" and calls[0]["donor"] == "doppio"
+    props = done["result"]["properties"]
+    assert props["forcingkit:donor"] == "doppio"
+    assert props["forcingkit:w_source"] == "model"
+    predicted = client.post(
+        "/api/v1/obc/predict-donor", json={**OBC, "donor": "doppio"}
+    ).json()
+    assert predicted["donor"]["id"] == "doppio"
+
+
+@pytest.mark.parametrize(
+    "donor, bbox, message",
+    [
+        ("roms", BBOX, "Unknown parent-ocean donor 'roms'"),
+        (
+            "nyofs",
+            {"min_lon": -70.0, "min_lat": 41.0, "max_lon": -69.0, "max_lat": 42.0},
+            "outside",
+        ),
+    ],
+)
+def test_a_bad_donor_is_refused_before_queueing(
+    client, monkeypatch, donor, bbox, message
+):
+    def never(**kwargs):
+        raise AssertionError("dispatched a refused request")
+
+    monkeypatch.setattr(dispatcher, "dispatch_obc_request", never)
+    request = {**OBC, "bbox": bbox, "donor": donor}
+    for url in ("/api/v1/jobs/obc", "/api/v1/obc", "/api/v1/obc/cache"):
+        response = client.post(url, json=request)
+        assert response.status_code == 400, url
+        assert message in response.json()["detail"]

@@ -22,10 +22,11 @@ def _item(
     store_id: str = STORE_ID,
     schema: str = "z-v3",
     w_source: str | None = None,
+    donor: str = "necofs",
 ) -> dict:
     props = {
         "forcingkit:schema": schema,
-        "forcingkit:donor": "necofs",
+        "forcingkit:donor": donor,
         "forcingkit:store_version": "1",
     }
     if w_source is not None:
@@ -50,9 +51,10 @@ class FakeService:
         final: str = "succeeded",
         schema: str = "z-v3",
         w_source: str | None = None,
+        donor: str = "necofs",
     ):
         self.base, self.final, self.schema = base, final, schema
-        self.w_source = w_source
+        self.w_source, self.donor = w_source, donor
         self.posts: list[dict] = []
         self.polls = 0
 
@@ -63,7 +65,9 @@ class FakeService:
             "status": status,
             "error": "All OBC donors failed" if status == "failed" else None,
             "status_url": f"http://elsewhere:9598/api/v1/jobs/{STORE_ID}",
-            "result": _item(self.base, schema=self.schema, w_source=self.w_source)
+            "result": _item(
+                self.base, schema=self.schema, w_source=self.w_source, donor=self.donor
+            )
             if status == "succeeded"
             else None,
         }
@@ -321,3 +325,48 @@ async def test_async_waves(store_server, tmp_path):
         ds = await fk.waves(BBOX, T0, 2)
     assert service.posts[0]["wfo"] == "okx" and service.posts[0]["grid"] == "CG1"
     assert float(ds["dir"].values[0, 1, 1]) == 90.0
+
+
+def test_ocean_names_a_donor_only_when_asked(store_server, tmp_path):
+    root, base, _ = store_server
+    _publish(root, z_v3_store())
+    service = FakeService(base, donor="doppio")
+    fk = _client(base, service, tmp_path)
+    ds = fk.ocean(BBOX, "2026-06-01T00:00:00Z", 6, donor="doppio")
+    assert service.posts[0]["donor"] == "doppio"
+    assert ds.attrs["forcingkit_donor"] == "doppio"
+    fk.ocean(BBOX, "2026-06-01T00:00:00Z", 6)
+    assert "donor" not in service.posts[1]
+
+
+def test_ocean_refuses_a_store_from_another_donor(store_server, tmp_path):
+    """A service older than the donor option ignores it and ranks the donors."""
+    root, base, _ = store_server
+    _publish(root, z_v3_store())
+    fk = _client(base, FakeService(base, donor="necofs"), tmp_path)
+    with pytest.raises(ForcingkitError, match="asked for donor 'doppio'") as err:
+        fk.ocean(BBOX, "2026-06-01T00:00:00Z", 6, donor="doppio")
+    assert err.value.detail == {"requested": "doppio", "delivered": "necofs"}
+
+
+def test_async_ocean_passes_the_donor(store_server, tmp_path):
+    import asyncio
+
+    root, base, _ = store_server
+    _publish(root, z_v3_store())
+    service = FakeService(base, donor="doppio")
+
+    async def run():
+        fk = AsyncClient(
+            base,
+            cache_dir=tmp_path / "cache",
+            poll_s=0,
+            http=httpx.AsyncClient(transport=httpx.MockTransport(service)),
+        )
+        return await fk.ocean(BBOX, "2026-06-01T00:00:00Z", 6, donor="doppio")
+
+    ds = asyncio.run(run())
+    assert (
+        service.posts[0]["donor"] == "doppio"
+        and ds.attrs["forcingkit_donor"] == "doppio"
+    )
