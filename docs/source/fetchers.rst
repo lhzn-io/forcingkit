@@ -209,7 +209,6 @@ proportion to height above the bed (`O'Brien (1970)
 .. math::
 
    w_c(z) = w(z) - \frac{z - z_b}{z_s - z_b} \left( w(z_s) - \frac{\partial \zeta}{\partial t} \right)
-ight)
 
 where z_b is the bed and z_s the top of the column. This is the same as subtracting one constant
 from the divergence of every wet level, so ``w_c`` is 0 at the bed and d(zeta)/dt at the surface
@@ -218,9 +217,7 @@ The correction fixes the column total, not where in the column the error is.
 
 Limits of the computed ``w``:
 
-- It is noisy, and on HYCOM it is mostly error even after the correction. At 1/12 degree
-  (about 9 km) the divergence comes from differences of currents a few centimeters per second
-  apart across 18 km, on z levels that do not conserve volume. Over the whale shark 19A0564 box
+- Its size is plausible but its value at a point cannot be checked. Over the whale shark 19A0564 box
   ([-70.6, 39.6, -69.6, 40.3], the shelf break south of Nantucket) for 12 h from
   2025-07-23 18:00 (ESPC-D-V02, read 2026-11-24):
 
@@ -249,10 +246,26 @@ Limits of the computed ``w``:
        - 5.5e-5
        - 5.6e-5
 
-  The correction brings the surface to the tide's rate and halves the median, but below
-  150 m the corrected median is still 0.6e-3 to 1.0e-3 m s-1 (50 to 90 m per day), about ten
-  times typical mesoscale vertical velocities (1e-5 to 1e-4 m s-1). Read it as an indication
-  of where the model's currents converge or diverge, not as a vertical speed.
+  The correction brings the surface to the tide's rate and halves the median. Below 150 m the
+  corrected median is 0.6e-3 to 1.0e-3 m s-1 (50 to 90 m per day). That is ten times the
+  mesoscale scale of 1e-4 m s-1, O(10 m per day), and the size of frontal submesoscale
+  ``w``, O(100 m per day) (`Mahadevan 2016
+  <https://doi.org/10.1146/annurev-marine-010814-015912>`__), but neither is the right
+  comparison here. ESPC-D-V02 is forced by the tide (see :doc:`hycom`), and HYCOM with tidal
+  forcing generates internal tides at the slope (`Arbic et al. 2010
+  <https://doi.org/10.1016/j.ocemod.2010.01.007>`__). An internal tide that heaves isopycnals
+  by a height eta at the M2 frequency (omega = 1.41e-4 s-1) moves water vertically at up to
+  omega eta, which is 1.4e-3 m s-1 for eta = 10 m. Two tidal models that carry their own ``w``
+  agree on the size along the same shelf break: over RED001's box south of Georges Bank
+  (:doc:`doppio`, "Parent ocean"), the median ``|w|`` at 500 to 1000 m is 1.5e-3 to
+  1.7e-3 m s-1 in Doppio and 1.3e-3 to 1.5e-3 m s-1 in NECOFS. A HYCOM ``w`` of 1e-3 m s-1 at
+  depth is therefore not by itself a sign of error.
+
+  What cannot be checked is the value at a point. At 1/12 degree (about 9 km) the divergence
+  comes from differences of currents a few centimeters per second apart across 18 km, on z
+  levels remapped from hybrid layers that do not conserve volume, and each output time is one
+  snapshot of a tidal field that reverses about every 6 hours. Read it as where the model's
+  currents converge or diverge at that hour, not as a measured vertical speed.
 - It is sensitive to the bed. Errors accumulate upward from the deepest wet level, whose depth
   the 40-level grid resolves only to the spacing between levels (tens to hundreds of meters at
   depth). The surface correction spreads the column's residual linearly over its height; it
