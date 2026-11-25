@@ -388,6 +388,28 @@ Results are the same values with or without the cache. Local files are not cache
 
 Every request to SMAST names the package in its User-Agent, as the other fetchers' requests do.
 
+Waves
+~~~~~
+
+``read_waves(bbox, start_time, hours, variables=("hs", "wdir", "tpeak"))`` reads SMAST's rolling wave forecast
+(``NECOFS_WAVE_FORECAST.nc``) on the GOM7 mesh's own nodes, for the triangles whose three nodes lie in the box. It
+returns each variable by time and node, with the nodes' coordinates and the triangles, so a map can draw each node's
+median dual cell, the area a node-centred wave model holds a value over. Nothing is regridded.
+
+Facts read from the file on 2026-11-25:
+
+- 207,081 nodes and 371,290 triangles, the GOM7 mesh; hourly, 193 hours (from about 3 days back to about 4 days
+  ahead). Its ``lon`` and ``lat`` are filled even while the current forecast's are zero (from 2026-11-20).
+- Variables: ``hs``, ``wdir``, ``tpeak``, ``fp``, ``wlen``, and the wind at elements. The file labels ``hs``
+  "meters s-1" and calls ``tpeak`` the "mean period T0m1"; ``read_waves`` returns ``hs`` in metres and describes
+  ``tpeak`` as the mean period it is. The direction convention (coming from or going to) is not stated.
+- The file's title and history name WAVEWATCH III (``ww3_gom6``), not FVCOM-SWAVE; the file does not say which.
+- No wave history was found under ``Forecasts/NECOFS_ARCHIVES``, so only the forecast's own window can be read.
+- The Sound's map box (74.4 to 71.4 W, 40.3 to 41.7 N) holds 18,319 nodes in 29,168 triangles; three variables over
+  116 hours took about 40 s from SMAST, most of it opening the file and reading the mesh.
+
+Hours are read in hyperslabs of ``WAVE_READ_HOURS`` (24) by contiguous node runs, which bounds memory.
+
 Wetting and drying
 ~~~~~~~~~~~~~~~~~~
 

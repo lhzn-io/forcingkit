@@ -35,6 +35,26 @@ def supports_bbox(bbox: list[float]) -> bool:
 
 
 NECOFS_GOM7_URL = "http://www.smast.umassd.edu:8080/thredds/dodsC/models/fvcom/NECOFS/Forecasts/NECOFS_GOM7_FORECAST.nc"
+# The rolling wave forecast, on the GOM7 mesh's nodes (lon, lat and nv only; no x/y or element centres). Its title and
+# history name WAVEWATCH III ("ww3_gom6"); SMAST does not say in the file whether it is WW3 or FVCOM-SWAVE.
+NECOFS_WAVE_URL = "http://www.smast.umassd.edu:8080/thredds/dodsC/models/fvcom/NECOFS/Forecasts/NECOFS_WAVE_FORECAST.nc"
+WAVE_VARIABLES = ("hs", "wdir", "tpeak", "fp", "wlen")
+# The file's own metadata, corrected where it is wrong (hs is labelled "meters s-1"). tpeak's long name in the file is
+# "mean period T0m1", so it is a mean period despite its name, not the spectral peak period.
+WAVE_ATTRS = {
+    "hs": {"units": "m", "long_name": "significant wave height"},
+    "wdir": {
+        "units": "degree",
+        "long_name": "wave mean direction (as in the file; convention not stated)",
+    },
+    "tpeak": {
+        "units": "s",
+        "long_name": "mean wave period T0m1 (the file's name for it is tpeak)",
+    },
+    "fp": {"units": "s-1", "long_name": "peak frequency"},
+    "wlen": {"units": "m", "long_name": "mean wavelength"},
+}
+WAVE_READ_HOURS = 24  # hours per hyperslab read: keeps one read's memory to tens of MB for a box like the Sound
 
 # SMAST's monthly hindcast (Seaplan_33_Hindcast_v1): hourly, each file holding its month from 00:00
 # on the 1st to 00:00 on the 1st of the next month. 1978 to 2016 are GOM3 runs on the coarser GOM3
@@ -700,6 +720,126 @@ def _volume_selection(
     elif any(k < 0 for k in ks):
         raise ValueError("negative layers need the file's layer count")
     return names, sorted(set(ks))
+
+
+def read_waves(
+    bbox: list[float],
+    start_time: str | pd.Timestamp,
+    hours: int,
+    variables: tuple[str, ...] = ("hs", "wdir", "tpeak"),
+    dap_url: str | None = None,
+) -> xr.Dataset:
+    """The NECOFS wave forecast on the mesh's own nodes (no regridding), for the triangles whose three nodes lie in
+    `bbox` = [min_lon, min_lat, max_lon, max_lat], hourly from `start_time` for `hours` (the hours the file holds).
+
+    Returns dims (time, node, element, vertex): each of `variables` (time, node; from WAVE_VARIABLES, with corrected
+    units, WAVE_ATTRS), `node_lon`, `node_lat`, `triangles` (element, vertex; indices into the returned nodes) and
+    `node_id` (the file's zero-based node index). Wave models of this kind hold each value over the node's median dual
+    cell, so a faithful map draws those cells, built from `triangles`. Reads the rolling wave forecast unless `dap_url`
+    names another file.
+    """
+    url = dap_url or NECOFS_WAVE_URL
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ds = _open_dap(url)
+    out = _subset_waves(ds, bbox, start_time, hours, variables)
+    out.attrs["url"] = url
+    logger.info(
+        f"NECOFS waves: {out.sizes['node']} nodes, {out.sizes['time']} hours from {url}"
+    )
+    return out
+
+
+def _wave_times(ds: xr.Dataset) -> pd.DatetimeIndex:
+    """The file's times. FVCOM's integer pair Itime (days) and Itime2 (milliseconds) is exact; the float `time` (in
+    days, stored as float32 in the wave file) is off by minutes at today's dates, so it is used only when the pair is
+    missing, rounded to the minute."""
+    origin = pd.Timestamp("1858-11-17")
+    if "Itime" in ds.variables and "Itime2" in ds.variables:
+        days = np.asarray(ds["Itime"].values, dtype=np.int64)
+        msec = np.asarray(ds["Itime2"].values, dtype=np.int64)
+        return pd.DatetimeIndex(
+            origin + pd.to_timedelta(days, unit="D") + pd.to_timedelta(msec, unit="ms")
+        )
+    t = ds["time"]
+    units = t.attrs.get("units", "days since 1858-11-17 00:00:00")
+    if not units.startswith("days since"):
+        raise ValueError(f"unexpected time units {units!r}")
+    origin = pd.Timestamp(units.partition(" since ")[2])
+    times = origin + pd.to_timedelta(np.asarray(t.values, dtype=np.float64), unit="D")
+    return pd.DatetimeIndex(times).round("min")
+
+
+def _subset_waves(
+    ds: xr.Dataset, bbox, start_time, hours: int, variables
+) -> xr.Dataset:
+    """`read_waves` on an opened file (local or remote): the box's nodes and triangles, then the hours, read in
+    hyperslabs of WAVE_READ_HOURS by contiguous node runs."""
+    bad = [v for v in variables if v not in WAVE_VARIABLES]
+    if bad:
+        raise ValueError(f"unknown wave variables {bad}; known: {WAVE_VARIABLES}")
+    missing = [v for v in variables if v not in ds.variables]
+    if missing:
+        raise ValueError(f"the file has no {missing}")
+    lon = np.asarray(ds["lon"].values, dtype=np.float64)
+    lon = np.where(lon > 180.0, lon - 360.0, lon)
+    lat = np.asarray(ds["lat"].values, dtype=np.float64)
+    if not np.any(lon) or not np.any(lat):
+        raise ValueError("the wave file's node coordinates are all zero")
+    min_lon, min_lat, max_lon, max_lat = bbox
+    inside = (lon >= min_lon) & (lon <= max_lon) & (lat >= min_lat) & (lat <= max_lat)
+    nv = np.asarray(ds["nv"].values).T.astype(np.int64) - 1  # (element, 3), zero-based
+    tri_global = nv[inside[nv].all(axis=1)]
+    if tri_global.size == 0:
+        raise ValueError(f"No NECOFS wave triangles inside {bbox}")
+    nodes, tri_local = np.unique(tri_global, return_inverse=True)
+    tri_local = tri_local.reshape(tri_global.shape).astype(np.int32)
+
+    times = _wave_times(ds)
+    start = pd.Timestamp(start_time)
+    start = start.tz_convert("UTC").tz_localize(None) if start.tzinfo else start
+    wanted = pd.date_range(start.floor("h"), periods=hours, freq="1h")
+    t_idx = times.get_indexer(wanted)
+    keep = t_idx >= 0
+    if not keep.any():
+        raise RuntimeError(
+            f"the wave file holds {times[0]} to {times[-1]}, none of {wanted[0]} to {wanted[-1]}"
+        )
+    t_idx, wanted = t_idx[keep], wanted[keep]
+
+    runs = _index_runs(nodes)
+    data = {v: np.empty((len(wanted), nodes.size), dtype=np.float32) for v in variables}
+    for p0 in range(0, len(wanted), WAVE_READ_HOURS):
+        piece = t_idx[p0 : p0 + WAVE_READ_HOURS]
+        t0, t1 = int(piece.min()), int(piece.max())
+        col = 0
+        for a, b in runs:
+            sel = nodes[(nodes >= a) & (nodes <= b)]
+            for v in variables:
+                slab = np.asarray(
+                    ds[v].isel(time=slice(t0, t1 + 1), node=slice(a, b + 1)).values
+                )
+                data[v][p0 : p0 + piece.size, col : col + sel.size] = slab[piece - t0][
+                    :, sel - a
+                ]
+            col += sel.size
+
+    return xr.Dataset(
+        {
+            **{v: (("time", "node"), data[v], WAVE_ATTRS[v]) for v in variables},
+            "node_lon": (("node",), lon[nodes].astype(np.float32)),
+            "node_lat": (("node",), lat[nodes].astype(np.float32)),
+            "triangles": (("element", "vertex"), tri_local),
+            "node_id": (("node",), nodes.astype(np.int64)),
+        },
+        coords={"time": wanted},
+        attrs={
+            "type": "NECOFS wave forecast on the GOM7 mesh nodes",
+            "source": "UMass Dartmouth SMAST",
+            "title_in_file": str(ds.attrs.get("title", "")),
+            "requested_bbox": list(bbox),
+        },
+    )
 
 
 # Neighbour codes in the `neighbours` table of `read_volume` and `volume`.
