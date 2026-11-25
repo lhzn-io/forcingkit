@@ -1,5 +1,6 @@
 """Client job flow against a mocked job API, with stores read from a real local HTTP server."""
 
+import asyncio
 import io
 import json
 import zipfile
@@ -370,3 +371,70 @@ def test_async_ocean_passes_the_donor(store_server, tmp_path):
         service.posts[0]["donor"] == "doppio"
         and ds.attrs["forcingkit_donor"] == "doppio"
     )
+
+
+def _flaky_jobs(fail: int, error=httpx.ConnectError):
+    """A job API whose first `fail` requests fail in transport; then a job that succeeds at once."""
+    calls = []
+
+    def service(request):
+        calls.append(request.method)
+        if len(calls) <= fail:
+            raise error(
+                "[Errno -3] Temporary failure in name resolution", request=request
+            )
+        return httpx.Response(
+            200,
+            json={
+                "job_id": "obc_x",
+                "kind": "ocean",
+                "status": "failed",
+                "error": "stop",
+            },
+        )
+
+    return service, calls
+
+
+def test_job_request_that_fails_in_transport_is_retried(tmp_path):
+    service, calls = _flaky_jobs(fail=2)
+    fk = Client(
+        "http://svc:9598",
+        cache_dir=tmp_path,
+        http=httpx.Client(transport=httpx.MockTransport(service)),
+        retry_wait_s=0.0,
+    )
+    with pytest.raises(ForcingkitError, match="stop"):
+        fk.ocean((-71.0, 41.2, -70.5, 41.7), T0, 3)
+    assert calls == ["POST", "POST", "POST"]
+
+
+def test_job_request_gives_up_after_its_attempts(tmp_path):
+    service, calls = _flaky_jobs(fail=10)
+    fk = Client(
+        "http://svc:9598",
+        cache_dir=tmp_path,
+        http=httpx.Client(transport=httpx.MockTransport(service)),
+        attempts=3,
+        retry_wait_s=0.0,
+    )
+    with pytest.raises(httpx.ConnectError):
+        fk.ocean((-71.0, 41.2, -70.5, 41.7), T0, 3)
+    assert len(calls) == 3
+
+
+def test_async_job_request_that_fails_in_transport_is_retried(tmp_path):
+    service, calls = _flaky_jobs(fail=1, error=httpx.ReadTimeout)
+
+    async def run():
+        fk = AsyncClient(
+            "http://svc:9598",
+            cache_dir=tmp_path,
+            http=httpx.AsyncClient(transport=httpx.MockTransport(service)),
+            retry_wait_s=0.0,
+        )
+        with pytest.raises(ForcingkitError, match="stop"):
+            await fk.ocean((-71.0, 41.2, -70.5, 41.7), T0, 3)
+
+    asyncio.run(run())
+    assert calls == ["POST", "POST"]

@@ -8,6 +8,7 @@ chunk cache. A second request for the same store is answered from the cache.
 import asyncio
 import hashlib
 import io
+import logging
 import os
 import time
 import zipfile
@@ -23,6 +24,8 @@ import xarray as xr
 
 from .schema import normalise
 from .store import open_remote
+
+log = logging.getLogger(__name__)
 
 BBox: TypeAlias = Sequence[float]  # (west, south, east, north), degrees
 TimeLike: TypeAlias = str | datetime | pd.Timestamp | np.datetime64
@@ -200,12 +203,35 @@ class _Base:
         poll_s: float = 5.0,
         timeout_s: float = 3 * 3600.0,
         on_progress: Optional[ProgressCallback] = None,
+        attempts: int = 4,
+        retry_wait_s: float = 2.0,
     ):
         self.base_url = base_url.rstrip("/")
         self.cache_dir = Path(cache_dir).expanduser()
         self.poll_s = poll_s
         self.timeout_s = timeout_s
         self.on_progress = on_progress
+        self.attempts = max(1, attempts)
+        self.retry_wait_s = retry_wait_s
+
+    def _retry_wait(
+        self, method: str, url: str, error: Exception, attempt: int
+    ) -> Optional[float]:
+        """Seconds to wait before retrying a job request that failed in transport (a failed name
+        lookup, a refused or reset connection, a timeout), or None when its attempts are spent.
+        Submitting a job again is safe: the service keys a job by its request."""
+        if attempt >= self.attempts:
+            return None
+        log.warning(
+            "%s %s failed (%s: %s); retry %d of %d",
+            method,
+            url,
+            type(error).__name__,
+            error,
+            attempt,
+            self.attempts - 1,
+        )
+        return self.retry_wait_s * attempt
 
     def _url(self, path: str) -> str:
         return f"{self.base_url}{path}"
@@ -294,8 +320,20 @@ class Client(_Base):
     def __exit__(self, *exc: Any) -> None:
         self.close()
 
+    def _send(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        attempt = 1
+        while True:
+            try:
+                return self._http.request(method, url, **kwargs)
+            except httpx.TransportError as e:
+                wait = self._retry_wait(method, url, e, attempt)
+                if wait is None:
+                    raise
+                time.sleep(wait)
+                attempt += 1
+
     def _wait(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        job = self._check(self._http.post(self._url(path), json=payload))
+        job = self._check(self._send("POST", self._url(path), json=payload))
         deadline = time.monotonic() + self.timeout_s
         while (item := self._settled(job)) is None:
             if time.monotonic() > deadline:
@@ -303,7 +341,7 @@ class Client(_Base):
                     f"job {job['job_id']} still {job['status']} after {self.timeout_s:.0f} s"
                 )
             time.sleep(self.poll_s)
-            job = self._check(self._http.get(self._local(job["status_url"])))
+            job = self._check(self._send("GET", self._local(job["status_url"])))
         return item
 
     def ocean(
@@ -451,8 +489,20 @@ class AsyncClient(_Base):
     async def __aexit__(self, *exc: Any) -> None:
         await self.aclose()
 
+    async def _send(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        attempt = 1
+        while True:
+            try:
+                return await self._http.request(method, url, **kwargs)
+            except httpx.TransportError as e:
+                wait = self._retry_wait(method, url, e, attempt)
+                if wait is None:
+                    raise
+                await asyncio.sleep(wait)
+                attempt += 1
+
     async def _wait(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        job = self._check(await self._http.post(self._url(path), json=payload))
+        job = self._check(await self._send("POST", self._url(path), json=payload))
         deadline = time.monotonic() + self.timeout_s
         while (item := self._settled(job)) is None:
             if time.monotonic() > deadline:
@@ -460,7 +510,7 @@ class AsyncClient(_Base):
                     f"job {job['job_id']} still {job['status']} after {self.timeout_s:.0f} s"
                 )
             await asyncio.sleep(self.poll_s)
-            job = self._check(await self._http.get(self._local(job["status_url"])))
+            job = self._check(await self._send("GET", self._local(job["status_url"])))
         return item
 
     async def ocean(
