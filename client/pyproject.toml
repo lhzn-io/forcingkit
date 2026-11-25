@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "forcingkit-client"
-version = "0.2.1"
+version = "0.2.2"
 description = "Lightweight Python client for a forcingkit service: ocean, atmosphere and station forcing as xarray, and forcing interpolated along a trajectory."
 readme = "README.md"
 requires-python = ">=3.11"
