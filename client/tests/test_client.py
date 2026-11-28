@@ -479,3 +479,19 @@ def test_volume_job_flow(store_server, tmp_path):
         ds["u"].dims == ("time", "siglay", "element")
         and float(ds["u"].values[0, 1, 0]) == 0.25
     )
+
+
+async def test_async_volume(store_server, tmp_path):
+    root, base, _ = store_server
+    _publish(root, _volume_store())
+    service = FakeService(base, schema="volume-v1")
+    async with AsyncClient(
+        base,
+        cache_dir=tmp_path / "cache",
+        poll_s=0,
+        http=httpx.AsyncClient(transport=httpx.MockTransport(service)),
+    ) as fk:
+        ds = await fk.volume(BBOX, T0, 2, variables=["u", "v"], cache_bust=True)
+    post = service.posts[0]
+    assert post["variables"] == ["u", "v"] and post["cache_bust"] is True
+    assert ds["siglay"].shape == (2, 3)

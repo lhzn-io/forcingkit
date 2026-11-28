@@ -481,6 +481,7 @@ def _volume_dataset(hours: int = 3, layers: int = 4) -> xr.Dataset:
         ({"hours": 0}, "hours must be 1 to"),
         ({"hours": 241}, "hours must be 1 to"),
         ({"start_time": "2026-06-01T00:30:00"}, "on the hour"),
+        ({"start_time": "not a time"}, "start_time"),
         ({"variables": ["u", "speed"]}, "variables must be among"),
         ({"layers": [-1]}, "negative layers"),
     ],
@@ -572,3 +573,42 @@ def test_volume_key_carries_the_day_only_near_the_forecast():
     assert key(box, recent, 48, sel, None, now="2026-11-01T06:00") == key(
         box, recent, 48, sel, None, now="2026-11-01T22:00"
     )
+
+
+def _counting_volume(monkeypatch, calls, fail=False):
+    from forcingkit.fetchers import necofs
+
+    def fake_volume(bbox, start, end, cache=True, variables=None, layers=None, **kw):
+        calls.append((start, end))
+        if fail:
+            raise OSError("server went away")
+        return _volume_dataset()
+
+    monkeypatch.setattr(necofs, "volume", fake_volume)
+
+
+def test_dispatch_volume_reuses_a_complete_store_unless_busted(tmp_path, monkeypatch):
+    calls = []
+    _counting_volume(monkeypatch, calls)
+    path = str(tmp_path / "vol_test.zarr")
+    args = ([-70.9, 41.3, -70.7, 41.5], "2026-06-01T00:00:00+00:00", 3, path)
+    assert dispatcher.dispatch_volume_request(*args) == path
+    assert calls == [
+        (pd.Timestamp("2026-06-01T00:00"), pd.Timestamp("2026-06-01T02:00"))
+    ]
+    dispatcher.dispatch_volume_request(*args)  # complete: no read
+    assert len(calls) == 1
+    dispatcher.dispatch_volume_request(*args, cache_bust=True)
+    assert len(calls) == 2
+    assert not (tmp_path / "vol_test.zarr.partial").exists()
+
+
+def test_dispatch_volume_publishes_nothing_when_the_read_fails(tmp_path, monkeypatch):
+    calls = []
+    _counting_volume(monkeypatch, calls, fail=True)
+    path = tmp_path / "vol_fail.zarr"
+    with pytest.raises(OSError):
+        dispatcher.dispatch_volume_request(
+            [-70.9, 41.3, -70.7, 41.5], "2026-06-01T00:00:00", 3, str(path)
+        )
+    assert not path.exists() and not (tmp_path / "vol_fail.zarr.partial").exists()
