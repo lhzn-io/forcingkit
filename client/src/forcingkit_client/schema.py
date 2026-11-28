@@ -7,13 +7,14 @@ one-shot donors write `legacy` stores in the donor's own conventions: `depth` po
 `latitude`/`longitude` names, and for HYCOM longitudes in 0..360. `normalise` brings those to the z-v3 conventions and refuses any schema it does not know,
 so a layout change fails here with a clear message instead of later on a variable name.
 The atmosphere (`hrrr-atm-v1`) and waves (`nwps-waves-v1`) stores are written in that convention
-too and pass through unchanged.
+too and pass through unchanged, as does a model's own mesh (`volume-v1`: an unstructured mesh with
+sigma layers, which has no z axis to convert).
 """
 
 import numpy as np
 import xarray as xr
 
-KNOWN_SCHEMAS = ("z-v3", "legacy", "hrrr-atm-v1", "nwps-waves-v1")
+KNOWN_SCHEMAS = ("z-v3", "legacy", "hrrr-atm-v1", "nwps-waves-v1", "volume-v1")
 
 
 class SchemaError(ValueError):

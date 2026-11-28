@@ -870,3 +870,97 @@ def get_obc_fetchers():
         if func is not None or hasattr(module, "iter_parent"):
             fetchers.append((module, func))
     return fetchers
+
+
+# A volume window ending this close to now, or later, may read NECOFS's rolling forecast, which is
+# issued daily: its store id then carries the request's UTC date, so it is rebuilt on a later day.
+VOLUME_FORECAST_REACH_H = 72
+
+
+def volume_key(
+    bbox: list[float],
+    start_time: str,
+    hours: int,
+    variables: tuple[str, ...],
+    layers: Optional[list[int]],
+    source: str = "necofs",
+    now=None,
+) -> str:
+    """Cache id of a volume delivery: the schema, the box (to 1e-4 degree), the window, the
+    selection and, for a window that may reach the forecast, the UTC date it was asked on."""
+    import hashlib
+
+    import pandas as pd
+
+    from forcingkit.fetchers.necofs import VOLUME_SCHEMA
+
+    t0 = pd.Timestamp(start_time)
+    t0 = (t0.tz_convert("UTC").tz_localize(None) if t0.tzinfo else t0).floor("h")
+    t1 = t0 + pd.Timedelta(hours=int(hours) - 1)
+    now = (
+        pd.Timestamp.now(tz="UTC").tz_localize(None)
+        if now is None
+        else pd.Timestamp(now)
+    )
+    recent = t1 >= now - pd.Timedelta(hours=VOLUME_FORECAST_REACH_H)
+    stamp = f"{now:%Y%m%d}" if recent else "archive"
+    box = "_".join(f"{float(b):.4f}" for b in bbox)
+    sel = (
+        ",".join(variables)
+        + "|"
+        + (",".join(str(k) for k in layers) if layers else "all")
+    )
+    key = (
+        f"vol_{source}_{VOLUME_SCHEMA}_{box}_{t0:%Y%m%dT%H}_{int(hours)}_{sel}_{stamp}"
+    )
+    return "vol_" + hashlib.sha256(key.encode()).hexdigest()[:12]
+
+
+def dispatch_volume_request(
+    bbox: list[float],
+    start_time: str,
+    hours: int,
+    zarr_path: str,
+    variables: Optional[tuple[str, ...]] = None,
+    layers: Optional[list[int]] = None,
+    cache_bust: bool = False,
+) -> str:
+    """NECOFS GOM7 on its own mesh, every sigma layer (or `layers`), for `hours` hourly records
+    from `start_time`, written to `zarr_path` (schema volume-v1, one record per chunk) and
+    published only when complete."""
+    import shutil
+
+    import pandas as pd
+
+    from forcingkit.fetchers import necofs
+    from forcingkit.zarr_stream import store_is_complete
+
+    if not cache_bust and store_is_complete(zarr_path, (necofs.VOLUME_SCHEMA,)):
+        logger.info(f"Cache hit for volume: {zarr_path}")
+        return zarr_path
+    t0 = pd.Timestamp(start_time)
+    t0 = (t0.tz_convert("UTC").tz_localize(None) if t0.tzinfo else t0).floor("h")
+    t1 = t0 + pd.Timedelta(hours=int(hours) - 1)
+    # The store is this delivery's cache, so the library's own (keyed without the forecast
+    # cycle) is not used.
+    ds = necofs.volume(bbox, t0, t1, cache=False, variables=variables, layers=layers)
+    ds = necofs._plain_attrs(ds)
+    ds.attrs["schema"] = necofs.VOLUME_SCHEMA
+    ds.attrs["complete"] = True
+    encoding = {}
+    for name, var in ds.variables.items():
+        var.encoding = {}
+        if "time" in var.dims and name != "time":
+            encoding[name] = {
+                "chunks": tuple(
+                    1 if d == "time" else n for d, n in zip(var.dims, var.shape)
+                )
+            }
+    tmp = zarr_path + ".partial"
+    shutil.rmtree(tmp, ignore_errors=True)
+    os.makedirs(os.path.dirname(zarr_path) or ".", exist_ok=True)
+    ds.to_zarr(tmp, mode="w", consolidated=True, zarr_format=2, encoding=encoding)
+    shutil.rmtree(zarr_path, ignore_errors=True)
+    os.replace(tmp, zarr_path)
+    logger.info(f"Volume store written: {zarr_path}")
+    return zarr_path

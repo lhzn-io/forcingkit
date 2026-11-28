@@ -69,8 +69,8 @@ def store_item(
     """The STAC Item for the finished store at `zarr_path`; `base_url` is the service root."""
     base = base_url.rstrip("/")
     with xr.open_zarr(zarr_path, consolidated=True, zarr_format=2) as ds:
-        lon = _axis(ds, "lon", "longitude")
-        lat = _axis(ds, "lat", "latitude")
+        lon = _axis(ds, "lon", "longitude", "node_lon")  # node_*: a model's own mesh
+        lat = _axis(ds, "lat", "latitude", "node_lat")
         bbox = None
         if lon is not None and lat is not None:
             lon = (lon + 180.0) % 360.0 - 180.0  # some donors deliver 0..360

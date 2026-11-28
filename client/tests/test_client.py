@@ -438,3 +438,44 @@ def test_async_job_request_that_fails_in_transport_is_retried(tmp_path):
 
     asyncio.run(run())
     assert calls == ["POST", "POST"]
+
+
+def _volume_store() -> xr.Dataset:
+    """A small store in the volume-v1 layout: one element, three nodes, two sigma layers."""
+    time = pd.date_range(T0, periods=2, freq="1h")
+    return xr.Dataset(
+        {
+            "u": (("time", "siglay", "element"), np.full((2, 2, 1), 0.25, np.float32)),
+            "v": (("time", "siglay", "element"), np.zeros((2, 2, 1), np.float32)),
+            "h": (("node",), np.array([10.0, 11.0, 12.0], np.float32)),
+            "siglay": (
+                ("siglay", "node"),
+                np.array([[-0.25] * 3, [-0.75] * 3], np.float32),
+            ),
+            "node_lon": (("node",), np.array([-72.5, -72.4, -72.45], np.float32)),
+            "node_lat": (("node",), np.array([41.0, 41.0, 41.1], np.float32)),
+            "triangles": (("element", "vertex"), np.array([[0, 1, 2]], np.int32)),
+        },
+        coords={"time": time},
+        attrs={"schema": "volume-v1", "complete": True},
+    )
+
+
+def test_volume_job_flow(store_server, tmp_path):
+    root, base, _ = store_server
+    _publish(root, _volume_store())
+    service = FakeService(base, schema="volume-v1")
+    ds = _client(base, service, tmp_path).volume(BBOX, T0, 2, layers=[0, 1])
+    post = service.posts[0]
+    assert (post["source"], post["hours"], post["variables"], post["layers"]) == (
+        "necofs",
+        2,
+        None,
+        [0, 1],
+    )
+    assert post["start_time"] == "2026-06-01T00:00:00"
+    assert ds.attrs["forcingkit_schema"] == "volume-v1"
+    assert (
+        ds["u"].dims == ("time", "siglay", "element")
+        and float(ds["u"].values[0, 1, 0]) == 0.25
+    )

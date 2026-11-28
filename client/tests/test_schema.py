@@ -42,3 +42,11 @@ def test_legacy_curvilinear_is_refused():
 def test_unknown_schema_is_refused():
     with pytest.raises(SchemaError, match="z-v9"):
         normalise(xr.Dataset(attrs={"schema": "z-v9"}))
+
+
+def test_volume_stores_pass_through():
+    ds = xr.Dataset(
+        {"u": (("time", "siglay", "element"), np.zeros((1, 2, 1)))},
+        attrs={"schema": "volume-v1"},
+    )
+    assert normalise(ds) is ds

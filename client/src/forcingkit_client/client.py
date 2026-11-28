@@ -120,6 +120,18 @@ def _waves_request(bbox, start, hours, wfo, grid, cache_bust):
     }
 
 
+def _volume_request(bbox, start, hours, variables, layers, cache_bust):
+    return {
+        "bbox": _bbox(bbox),
+        "start_time": iso_utc(start),
+        "hours": int(hours),
+        "source": "necofs",
+        "variables": list(variables) if variables is not None else None,
+        "layers": [int(k) for k in layers] if layers is not None else None,
+        "cache_bust": bool(cache_bust),
+    }
+
+
 def _ndbc_dataset(data: Dict[str, Any]) -> xr.Dataset:
     """The /api/v1/ndbc payload as one Dataset on a shared time axis (outer join)."""
     parts = []
@@ -409,6 +421,23 @@ class Client(_Base):
         payload = _waves_request(bbox, start, hours, wfo, grid, cache_bust)
         return self.open_item(self._wait("/api/v1/jobs/waves", payload))
 
+    def volume(
+        self,
+        bbox: BBox,
+        start: TimeLike,
+        hours: int,
+        variables: Optional[Sequence[str]] = None,
+        layers: Optional[Sequence[int]] = None,
+        cache_bust: bool = False,
+    ) -> xr.Dataset:
+        """NECOFS FVCOM GOM7 on its own mesh with every sigma layer (or `layers`, zero-based,
+        surface first), hourly from `start` (on the hour): element `u`, `v`, node `zeta` by
+        default (`variables` among u, v, ww, temp, salinity, zeta), with `h`, `siglay`,
+        `siglev`, `triangles` and node and element coordinates. Schema volume-v1; a cold
+        build can take minutes."""
+        payload = _volume_request(bbox, start, hours, variables, layers, cache_bust)
+        return self.open_item(self._wait("/api/v1/jobs/volume", payload))
+
     def ndbc(
         self,
         station_id: str,
@@ -564,6 +593,19 @@ class AsyncClient(_Base):
     ) -> xr.Dataset:
         payload = _waves_request(bbox, start, hours, wfo, grid, cache_bust)
         item = await self._wait("/api/v1/jobs/waves", payload)
+        return await asyncio.to_thread(self.open_item, item)
+
+    async def volume(
+        self,
+        bbox: BBox,
+        start: TimeLike,
+        hours: int,
+        variables: Optional[Sequence[str]] = None,
+        layers: Optional[Sequence[int]] = None,
+        cache_bust: bool = False,
+    ) -> xr.Dataset:
+        payload = _volume_request(bbox, start, hours, variables, layers, cache_bust)
+        item = await self._wait("/api/v1/jobs/volume", payload)
         return await asyncio.to_thread(self.open_item, item)
 
     async def ndbc(

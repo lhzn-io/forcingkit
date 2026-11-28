@@ -18,6 +18,7 @@ application's embedded Python (3.11 or newer).
    doppio = fk.ocean(box, "2022-08-13", 24, donor="doppio")  # one named parent model
    air = fk.atmosphere(box, "2025-07-01", 24)     # HRRR u10, v10, t2m, q2m, sp, dswrf, dlwrf, prate
    waves = fk.waves(box, "2025-07-01", 24, wfo="box", grid="CG1")  # NWPS hs, tp, dir, shts, ws, wdir
+   mesh = fk.volume(box, "2025-07-01T00Z", 24)   # NECOFS on its own mesh, every sigma layer
    buoy = fk.ndbc("44013", "2025-07-01", "2025-07-02", products=("stdmet", "adcp"))
    elevation = fk.bathymetry(box, resolution_m=30)
 
@@ -49,6 +50,9 @@ It submits a job and polls it:
      - The same for ``POST /api/v1/atmosphere``.
    * - ``POST /api/v1/jobs/waves``
      - The same for ``POST /api/v1/waves``.
+   * - ``POST /api/v1/jobs/volume``
+     - A model's own 3D output, a job only: NECOFS on its mesh with every sigma layer
+       (:doc:`necofs`, "The service's volume job").
    * - ``GET /api/v1/jobs/{job_id}``
      - ``status`` is ``queued``, ``running``, ``succeeded`` or ``failed`` (with ``error``). Once
        succeeded, ``result`` is a STAC Item describing the store.

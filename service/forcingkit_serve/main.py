@@ -734,13 +734,98 @@ def download_waves(zarr_id: str):
     )
 
 
-# Jobs: the same builds as /obc, /atmosphere and /waves, queued, so a caller polls for the result
-# instead of holding a request open through a cold build. The job id is the store id.
+class VolumeRequest(BaseModel):
+    bbox: BoundingBox
+    start_time: str  # ISO 8601, UTC, on the hour
+    hours: int
+    source: str = "necofs"
+    # Fields among forcingkit.fetchers.necofs.VOLUME_FIELDS; None: VOLUME_DEFAULT_VARIABLES.
+    variables: List[str] | None = None
+    # Zero-based sigma layers, surface first; None: every layer.
+    layers: List[int] | None = None
+    cache_bust: bool = False
 
-JOB_KINDS = {"obc": "ocean", "atm": "atmosphere", "wav": "waves"}
+
+VOLUME_DEFAULT_VARIABLES = ("u", "v", "zeta")
+VOLUME_MAX_HOURS = 240
+
+
+def _volume_store(
+    request: VolumeRequest,
+) -> tuple[str, str, tuple[str, ...], list[int] | None]:
+    """(zarr_id, zarr_path, variables, layers) of the volume store `request` names; HTTPException
+    400 for a request that cannot be served."""
+    import pandas as pd
+
+    from forcingkit.dispatcher import volume_key
+    from forcingkit.fetchers.necofs import _volume_selection
+
+    if request.source != "necofs":
+        raise HTTPException(
+            status_code=400, detail=f"unsupported source {request.source}"
+        )
+    if not 1 <= request.hours <= VOLUME_MAX_HOURS:
+        raise HTTPException(
+            status_code=400, detail=f"hours must be 1 to {VOLUME_MAX_HOURS}"
+        )
+    try:
+        t0 = pd.Timestamp(request.start_time)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"start_time: {e}")
+    if t0 != t0.floor("h"):
+        raise HTTPException(status_code=400, detail="start_time must be on the hour")
+    try:
+        variables, layers = _volume_selection(
+            request.variables or VOLUME_DEFAULT_VARIABLES, request.layers
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    zarr_id = volume_key(
+        _bbox_list(request.bbox),
+        request.start_time,
+        request.hours,
+        variables,
+        layers,
+        request.source,
+    )
+    return (
+        zarr_id,
+        os.path.join(settings.cache_dir(), f"{zarr_id}.zarr"),
+        variables,
+        layers,
+    )
+
+
+def _build_volume(request: VolumeRequest, store: tuple) -> Dict[str, Any]:
+    """Build (or find cached) the volume store `store` names; raises on failure."""
+    from forcingkit.dispatcher import dispatch_volume_request
+
+    zarr_id, zarr_path, variables, layers = store
+    final_path = dispatch_volume_request(
+        _bbox_list(request.bbox),
+        request.start_time,
+        request.hours,
+        zarr_path,
+        variables=variables,
+        layers=layers,
+        cache_bust=request.cache_bust,
+    )
+    return {
+        "status": "success",
+        "zarr_id": zarr_id,
+        "zarr_path": final_path,
+        "source": request.source,
+    }
+
+
+# Jobs: the same builds as /obc, /atmosphere and /waves, queued, so a caller polls for the result
+# instead of holding a request open through a cold build; and the volume, a job only. The job id
+# is the store id.
+
+JOB_KINDS = {"obc": "ocean", "atm": "atmosphere", "wav": "waves", "vol": "volume"}
 
 # Donor reported for a finished store found on disk after a restart, by kind (ocean reads it).
-STORE_DONORS = {"atmosphere": "hrrr", "waves": "nwps"}
+STORE_DONORS = {"atmosphere": "hrrr", "waves": "nwps", "volume": "necofs"}
 
 
 def _job_view(job: Job, http: Request) -> Dict[str, Any]:
@@ -843,6 +928,26 @@ def submit_waves_job(request: WavesRequest, http: Request) -> JSONResponse:
         zarr_path,
         request.cache_bust,
         lambda: _build_waves(request, store),
+        lambda: {"zarr_path": zarr_path, "source": request.source},
+    )
+
+
+@app.post("/api/v1/jobs/volume", status_code=202)
+def submit_volume_job(request: VolumeRequest, http: Request) -> JSONResponse:
+    """Queue a model's own 3D output for a box: NECOFS FVCOM GOM7 on its unstructured mesh with
+    every sigma layer (or `layers`), hourly for `hours` from `start_time`, no regridding (schema
+    volume-v1). Element `u`, `v` (and `ww`), node `zeta` (and `temp`, `salinity`), with `h`,
+    `siglay`, `siglev` and the mesh. A cold build reads the archive or the forecast over OPeNDAP
+    and can take minutes; poll `status_url`. A window that may reach the forecast is rebuilt on a
+    later UTC day."""
+    store = _volume_store(request)
+    zarr_id, zarr_path, _, _ = store
+    return _submit(
+        http,
+        zarr_id,
+        zarr_path,
+        request.cache_bust,
+        lambda: _build_volume(request, store),
         lambda: {"zarr_path": zarr_path, "source": request.source},
     )
 

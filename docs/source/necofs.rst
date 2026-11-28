@@ -375,6 +375,25 @@ selections existed, and a selection never shares a key with a whole volume. Hype
 above (2,831 elements, 1,829 nodes, 45 layers, about 110 MB) took about five minutes from SMAST
 on 2026-10-22, almost all of it server round trips, and 0.1 s from the cache.
 
+The service's volume job
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+``POST /api/v1/jobs/volume`` queues the same read for a client that does not import forcingkit
+(``Client.volume`` in :doc:`client`)::
+
+   {"bbox": {"min_lon": -72.2, "min_lat": 41.15, "max_lon": -71.9, "max_lat": 41.35},
+    "start_time": "2026-04-02T00:00:00", "hours": 48,
+    "variables": ["u", "v", "zeta"], "layers": null}
+
+``variables`` defaults to ``u``, ``v`` and ``zeta`` (the velocities and the free surface, about a
+third of all six fields), ``layers`` to every layer; ``hours`` runs from 1 to 240 from a
+``start_time`` on the hour. The result is a STAC Item whose ``zarr`` asset is the ``volume-v1``
+store, one hourly record per chunk, so a reader fetches only the hours it uses. The store is
+the job's own cache, keyed by the schema, the box, the window and the selection; a window that
+ends less than 72 hours before the request, or later, may read the rolling forecast (issued
+daily), so its key also carries the request's UTC date and a request on a later day builds a
+fresh store.
+
 Finding a box's elements needs the whole mesh: the node and element coordinates (``lon``,
 ``lat``, ``x``, ``y``, ``lonc``, ``latc``, ``xc``, ``yc``) and ``nv``, about 14 MB for GOM7,
 with the edge-neighbour table built from them. ``read_surface``, ``read_volume`` and ``volume``

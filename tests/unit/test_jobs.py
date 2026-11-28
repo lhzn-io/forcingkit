@@ -441,3 +441,134 @@ def test_a_bad_donor_is_refused_before_queueing(
         response = client.post(url, json=request)
         assert response.status_code == 400, url
         assert message in response.json()["detail"]
+
+
+# ---- the volume job: a model's own mesh, every sigma layer -------------------------------------
+
+VOLUME = {"bbox": BBOX, "start_time": "2026-06-01T00:00:00", "hours": 3}
+
+
+def _volume_dataset(hours: int = 3, layers: int = 4) -> xr.Dataset:
+    """A small dataset in the volume-v1 layout: 3 nodes, 1 element, `layers` sigma layers."""
+    time_ = pd.date_range("2026-06-01", periods=hours, freq="1h")
+    siglay = np.repeat(-(np.arange(layers) + 0.5)[:, None] / layers, 3, axis=1)
+    return xr.Dataset(
+        {
+            "u": (
+                ("time", "siglay", "element"),
+                np.full((hours, layers, 1), 0.3, np.float32),
+            ),
+            "v": (
+                ("time", "siglay", "element"),
+                np.full((hours, layers, 1), -0.1, np.float32),
+            ),
+            "zeta": (("time", "node"), np.zeros((hours, 3), np.float32)),
+            "h": (("node",), np.array([10.0, 12.0, 11.0], np.float32)),
+            "siglay": (("siglay", "node"), siglay.astype(np.float32)),
+            "node_lon": (("node",), np.array([-70.9, -70.7, -70.8], np.float32)),
+            "node_lat": (("node",), np.array([41.3, 41.3, 41.5], np.float32)),
+            "triangles": (("element", "vertex"), np.array([[0, 1, 2]], np.int32)),
+        },
+        coords={"time": time_},
+        attrs={"schema": "volume-v1", "source": "UMass Dartmouth SMAST"},
+    )
+
+
+@pytest.mark.parametrize(
+    "change, message",
+    [
+        ({"source": "fvcom-other"}, "unsupported source"),
+        ({"hours": 0}, "hours must be 1 to"),
+        ({"hours": 241}, "hours must be 1 to"),
+        ({"start_time": "2026-06-01T00:30:00"}, "on the hour"),
+        ({"variables": ["u", "speed"]}, "variables must be among"),
+        ({"layers": [-1]}, "negative layers"),
+    ],
+)
+def test_volume_rejects_bad_requests(client, change, message):
+    response = client.post("/api/v1/jobs/volume", json={**VOLUME, **change})
+    assert response.status_code == 400 and message in response.json()["detail"]
+
+
+def test_volume_job_returns_stac_item_and_survives_restart(client, monkeypatch):
+    from forcingkit.fetchers import necofs
+
+    calls = []
+
+    def fake_volume(
+        bbox, start, end, cache=True, variables=None, layers=None, **kwargs
+    ):
+        calls.append(
+            {
+                "start": start,
+                "end": end,
+                "cache": cache,
+                "variables": variables,
+                "layers": layers,
+            }
+        )
+        return _volume_dataset()
+
+    monkeypatch.setattr(necofs, "volume", fake_volume)
+    body = client.post("/api/v1/jobs/volume", json=VOLUME).json()
+    assert body["job_id"].startswith("vol_") and body["kind"] == "volume"
+    done = _wait(client, body["status_url"])
+    assert done["status"] == "succeeded", done
+    call = calls[0]
+    assert (
+        call["variables"] == ("u", "v", "zeta")
+        and call["layers"] is None
+        and call["cache"] is False
+    )
+    assert call["start"] == pd.Timestamp("2026-06-01T00:00") and call[
+        "end"
+    ] == pd.Timestamp("2026-06-01T02:00")
+    item = pystac.Item.from_dict(done["result"])
+    assert item.properties["forcingkit:schema"] == "volume-v1"
+    assert item.properties["forcingkit:donor"] == "necofs"
+    assert item.bbox == pytest.approx(
+        [-70.9, 41.3, -70.7, 41.5], abs=1e-5
+    )  # from the mesh's nodes
+    assert client.get(f"/api/v1/stores/{item.id}.zarr/.zattrs").status_code == 200
+    store = xr.open_zarr(
+        main.settings.cache_dir(f"{item.id}.zarr"), consolidated=True, zarr_format=2
+    )
+    assert (
+        store.attrs["complete"] is True and store["u"].encoding["chunks"][0] == 1
+    )  # one hour a chunk
+
+    monkeypatch.setattr(jobs, "registry", jobs.JobRegistry(workers=1))
+    again = client.get(f"/api/v1/jobs/{item.id}").json()
+    assert again["status"] == "succeeded"
+    assert again["result"]["properties"]["forcingkit:donor"] == "necofs"
+    assert len(calls) == 1
+
+
+def test_volume_selection_is_part_of_the_store_id(client, monkeypatch):
+    from forcingkit.fetchers import necofs
+
+    monkeypatch.setattr(necofs, "volume", lambda *a, **k: _volume_dataset())
+    bodies = [
+        client.post("/api/v1/jobs/volume", json={**VOLUME, **extra}).json()
+        for extra in ({}, {"layers": [0, 1]}, {"variables": ["u", "v"]}, {"hours": 4})
+    ]
+    assert len({b["job_id"] for b in bodies}) == 4
+    for b in bodies:  # let each build finish inside the test
+        assert _wait(client, b["status_url"])["status"] == "succeeded"
+
+
+def test_volume_key_carries_the_day_only_near_the_forecast():
+    key = dispatcher.volume_key
+    sel = ("u", "v", "zeta")
+    box = [-70.9, 41.3, -70.6, 41.6]
+    old = "2026-06-01T00:00:00"
+    assert key(box, old, 24, sel, None, now="2026-11-01T06:00") == key(
+        box, old, 24, sel, None, now="2026-11-02T06:00"
+    )  # an archived window: one store whenever asked
+    recent = "2026-11-01T00:00:00"
+    assert key(box, recent, 48, sel, None, now="2026-11-01T06:00") != key(
+        box, recent, 48, sel, None, now="2026-11-02T06:00"
+    )  # may read the forecast: rebuilt on a later day
+    assert key(box, recent, 48, sel, None, now="2026-11-01T06:00") == key(
+        box, recent, 48, sel, None, now="2026-11-01T22:00"
+    )
